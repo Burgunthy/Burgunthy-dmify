@@ -9,21 +9,9 @@ export default function InstagramAuthPage() {
   const supabase = createClient();
   const [loading, setLoading] = useState(false);
 
-  const loginWithInstagram = async () => {
-    setLoading(true);
-
-    try {
-      await supabase.auth.signInWithOAuth({
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        provider: "instagram" as any,
-        options: {
-          redirectTo: `${window.location.origin}/auth/callback`,
-        },
-      });
-    } catch {
-      // Instagram OAuth is not yet configured — show placeholder state
-      setLoading(false);
-    }
+  const loginWithInstagram = () => {
+    // Redirect to Meta OAuth flow via our API route
+    window.location.href = '/api/auth/instagram'
   };
 
   return (
@@ -47,21 +35,8 @@ export default function InstagramAuthPage() {
             Connect Instagram Account
           </h1>
           <p className="text-sm text-gray-500 leading-relaxed">
-            Connect your Instagram account to use the automatic comment link feature.
-            This feature is coming soon.
+            Connect your Instagram account to enable automatic comment replies and DM link delivery.
           </p>
-        </div>
-
-        {/* Status badge */}
-        <div className="inline-flex items-center gap-2 rounded-full bg-amber-50 px-4 py-2 text-sm font-medium text-amber-700 border border-amber-200">
-          <svg className="h-4 w-4" fill="currentColor" viewBox="0 0 20 20">
-            <path
-              fillRule="evenodd"
-              d="M8.485 2.495c.673-1.167 2.357-1.167 3.03 0l6.28 10.875c.673 1.167-.17 2.625-1.516 2.625H3.72c-1.347 0-2.189-1.458-1.515-2.625L8.485 2.495zM10 5a.75.75 0 0 1 .75.75v3.5a.75.75 0 0 1-1.5 0v-3.5A.75.75 0 0 1 10 5zm0 9a1 1 0 1 0 0-2 1 1 0 0 0 0 2z"
-              clipRule="evenodd"
-            />
-          </svg>
-          Coming Soon
         </div>
 
         {/* Action buttons */}
