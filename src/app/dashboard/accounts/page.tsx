@@ -1,18 +1,16 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { Suspense, useEffect, useState } from "react"
 import { createClient } from "@/lib/supabase/client"
+import { useSearchParams, useRouter } from "next/navigation"
 import {
   Trash2,
-  RefreshCw,
   AtSign,
   CheckCircle2,
   AlertCircle,
   Camera,
   ExternalLink,
-  Key,
   Loader2,
-  X,
 } from "lucide-react"
 
 interface Account {
@@ -35,13 +33,58 @@ interface Account {
   updated_at: string
 }
 
+type OAuthStatus = {
+  type: "success" | "error"
+  message: string
+} | null
+
+const ERROR_MESSAGES: Record<string, string> = {
+  invalid_state: "Security check failed. Please try again.",
+  oauth_denied: "Instagram authorization was cancelled.",
+  no_code: "No authorization code received. Please try again.",
+  token_failed: "Failed to exchange token with Meta. Check your app settings.",
+  no_ig_account:
+    "No Instagram Business account found. Your Instagram must be a Business or Creator account linked to a Facebook Page.",
+  db_error: "Database error. Please contact support.",
+  unknown: "An unexpected error occurred. Please try again.",
+}
+
 export default function AccountsPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="flex h-64 items-center justify-center">
+          <div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
+        </div>
+      }
+    >
+      <AccountsContent />
+    </Suspense>
+  )
+}
+
+function AccountsContent() {
   const [accounts, setAccounts] = useState<Account[]>([])
   const [loading, setLoading] = useState(true)
-  const [showModal, setShowModal] = useState(false)
-  const [token, setToken] = useState("")
   const [connecting, setConnecting] = useState(false)
-  const [connectError, setConnectError] = useState("")
+  const [status, setStatus] = useState<OAuthStatus>(null)
+  const searchParams = useSearchParams()
+  const router = useRouter()
+
+  // Handle OAuth callback params
+  useEffect(() => {
+    const success = searchParams.get("success")
+    const error = searchParams.get("error")
+
+    if (success === "connected") {
+      setStatus({ type: "success", message: "Instagram account connected successfully!" })
+      router.replace("/dashboard/accounts")
+    } else if (error) {
+      const msg = ERROR_MESSAGES[error] || ERROR_MESSAGES.unknown
+      setStatus({ type: "error", message: msg })
+      router.replace("/dashboard/accounts")
+    }
+  }, [searchParams, router])
 
   useEffect(() => {
     fetchAccounts()
@@ -62,29 +105,9 @@ export default function AccountsPage() {
     }
   }
 
-  const handleConnect = async () => {
-    if (!token.trim()) return
+  const handleConnectOAuth = () => {
     setConnecting(true)
-    setConnectError("")
-    try {
-      const resp = await fetch("/api/accounts/connect", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ access_token: token.trim() }),
-      })
-      const data = await resp.json()
-      if (!resp.ok) {
-        setConnectError(data.error || "Connection failed")
-        return
-      }
-      setShowModal(false)
-      setToken("")
-      await fetchAccounts()
-    } catch {
-      setConnectError("Network error. Please try again.")
-    } finally {
-      setConnecting(false)
-    }
+    window.location.href = "/api/auth/instagram"
   }
 
   const handleDelete = async (id: string) => {
@@ -124,13 +147,42 @@ export default function AccountsPage() {
           </p>
         </div>
         <button
-          onClick={() => setShowModal(true)}
-          className="flex items-center gap-2 rounded-lg bg-gradient-to-r from-purple-600 to-pink-600 px-4 py-2.5 text-sm font-medium text-white shadow-sm transition-all hover:from-purple-700 hover:to-pink-700 hover:shadow-md"
+          onClick={handleConnectOAuth}
+          disabled={connecting}
+          className="flex items-center gap-2 rounded-lg bg-gradient-to-r from-purple-600 to-pink-600 px-4 py-2.5 text-sm font-medium text-white shadow-sm transition-all hover:from-purple-700 hover:to-pink-700 hover:shadow-md disabled:opacity-50"
         >
-          <Camera className="h-4 w-4" />
-          Connect Instagram
+          {connecting ? (
+            <Loader2 className="h-4 w-4 animate-spin" />
+          ) : (
+            <Camera className="h-4 w-4" />
+          )}
+          {connecting ? "Redirecting..." : "Connect Instagram"}
         </button>
       </div>
+
+      {/* Status banner */}
+      {status && (
+        <div
+          className={`flex items-center gap-3 rounded-lg p-4 ${
+            status.type === "success"
+              ? "bg-emerald-50 text-emerald-800 dark:bg-emerald-900/20 dark:text-emerald-300"
+              : "bg-red-50 text-red-800 dark:bg-red-900/20 dark:text-red-300"
+          }`}
+        >
+          {status.type === "success" ? (
+            <CheckCircle2 className="h-5 w-5 shrink-0" />
+          ) : (
+            <AlertCircle className="h-5 w-5 shrink-0" />
+          )}
+          <p className="text-sm">{status.message}</p>
+          <button
+            onClick={() => setStatus(null)}
+            className="ml-auto text-current opacity-60 hover:opacity-100"
+          >
+            ✕
+          </button>
+        </div>
+      )}
 
       {/* Account cards */}
       {accounts.length === 0 ? (
@@ -142,13 +194,18 @@ export default function AccountsPage() {
             No connected accounts yet
           </p>
           <p className="mt-1 text-xs text-zinc-400">
-            Connect your Instagram account to start auto-DMing links to commenters.
+            Connect your Instagram Business account to start auto-DMing links to commenters.
           </p>
           <button
-            onClick={() => setShowModal(true)}
-            className="mt-4 flex items-center gap-2 rounded-lg bg-gradient-to-r from-purple-600 to-pink-600 px-4 py-2 text-sm font-medium text-white transition-all hover:from-purple-700 hover:to-pink-700"
+            onClick={handleConnectOAuth}
+            disabled={connecting}
+            className="mt-4 flex items-center gap-2 rounded-lg bg-gradient-to-r from-purple-600 to-pink-600 px-4 py-2 text-sm font-medium text-white transition-all hover:from-purple-700 hover:to-pink-700 disabled:opacity-50"
           >
-            <Camera className="h-4 w-4" />
+            {connecting ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <Camera className="h-4 w-4" />
+            )}
             Connect with Instagram
           </button>
         </div>
@@ -210,81 +267,26 @@ export default function AccountsPage() {
         </div>
       )}
 
-      {/* Token Input Modal */}
-      {showModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-          <div className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-xl dark:bg-zinc-900">
-            <div className="flex items-center justify-between mb-2">
-              <div className="flex items-center gap-3">
-                <div className="rounded-lg bg-purple-100 p-2 dark:bg-purple-900/30">
-                  <Key className="h-5 w-5 text-purple-600" />
-                </div>
-                <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-100">
-                  Connect Instagram
-                </h2>
-              </div>
-              <button
-                onClick={() => { setShowModal(false); setConnectError("") }}
-                className="rounded-lg p-1.5 text-zinc-400 hover:bg-zinc-100 dark:hover:bg-zinc-800"
-              >
-                <X className="h-5 w-5" />
-              </button>
-            </div>
-
-            <div className="mb-4 rounded-lg bg-blue-50 p-3 dark:bg-blue-900/20">
-              <p className="text-xs text-blue-800 dark:text-blue-300 leading-relaxed">
-                <strong>How to get your token:</strong><br />
-                1. Go to your Meta App → Instagram API<br />
-                2. Click &quot;Add Instagram account&quot; in step 2<br />
-                3. Generate a long-lived token<br />
-                4. Copy and paste it below
-              </p>
-            </div>
-
-            <textarea
-              value={token}
-              onChange={(e) => { setToken(e.target.value); setConnectError("") }}
-              className="w-full rounded-lg border border-zinc-200 bg-white px-3 py-2.5 text-sm text-zinc-900 font-mono focus:border-purple-500 focus:outline-none focus:ring-2 focus:ring-purple-500/20 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100"
-              rows={4}
-              placeholder="Paste your Instagram access token here..."
-              disabled={connecting}
-            />
-
-            {connectError && (
-              <p className="mt-2 text-xs text-red-600 dark:text-red-400">
-                {connectError}
-              </p>
-            )}
-
-            <div className="mt-4 flex justify-end gap-3">
-              <button
-                onClick={() => { setShowModal(false); setConnectError("") }}
-                className="rounded-lg border border-zinc-200 px-4 py-2 text-sm font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
-                disabled={connecting}
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleConnect}
-                disabled={connecting || !token.trim()}
-                className="flex items-center gap-2 rounded-lg bg-gradient-to-r from-purple-600 to-pink-600 px-4 py-2 text-sm font-medium text-white transition-all hover:from-purple-700 hover:to-pink-700 disabled:opacity-50"
-              >
-                {connecting ? (
-                  <>
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                    Connecting...
-                  </>
-                ) : (
-                  <>
-                    <Camera className="h-4 w-4" />
-                    Connect
-                  </>
-                )}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* Requirements note */}
+      <div className="rounded-xl border border-zinc-200 bg-zinc-50 p-4 dark:border-zinc-800 dark:bg-zinc-900/50">
+        <h4 className="text-xs font-semibold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">
+          Requirements
+        </h4>
+        <ul className="mt-2 space-y-1.5 text-xs text-zinc-600 dark:text-zinc-400">
+          <li className="flex items-start gap-2">
+            <span className="mt-0.5 text-purple-500">•</span>
+            <span>Instagram account must be set to <strong>Business</strong> or <strong>Creator</strong></span>
+          </li>
+          <li className="flex items-start gap-2">
+            <span className="mt-0.5 text-purple-500">•</span>
+            <span>Must be linked to a <strong>Facebook Page</strong></span>
+          </li>
+          <li className="flex items-start gap-2">
+            <span className="mt-0.5 text-purple-500">•</span>
+            <span>The Facebook Page must be assigned to your Meta App</span>
+          </li>
+        </ul>
+      </div>
     </div>
   )
 }
