@@ -23,14 +23,14 @@ MAPPING = {
     "vercel.token": "VERCEL_TOKEN",
     "supabase.anon": "NEXT_PUBLIC_SUPABASE_ANON_KEY",
     "supabase.service_role": "SUPABASE_SERVICE_ROLE_KEY",
+    "meta.app_id": "META_APP_ID",
+    "meta.app_secret": "META_APP_SECRET",
 }
 
 EMPTY = ""
 STATIC_VARS = {
     "NEXT_PUBLIC_SUPABASE_URL": "https://rzbpilxfwawwyxwxycku.supabase.co",
     "NEXT_PUBLIC_APP_URL": "https://commentlink-xi.vercel.app",
-    "META_APP_ID": EMPTY,
-    "META_APP_SECRET": EMPTY,
     "META_VERIFY_TOKEN": EMPTY,
 }
 

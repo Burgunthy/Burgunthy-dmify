@@ -5,7 +5,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 
 // Meta App config
 const APP_SECRET = process.env.META_APP_SECRET || ''
-const VERIFY_TOKEN = process.env.META_WEBHOOK_VERIFY_TOKEN || 'commentlink_verify'
+const VERIFY_TOKEN = process.env.META_VERIFY_TOKEN || 'dmify_verify'
 
 // Simple in-memory dedup (use Redis in production)
 const processedComments = new Set<string>()
