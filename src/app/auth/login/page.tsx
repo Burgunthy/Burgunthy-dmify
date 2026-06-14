@@ -41,7 +41,7 @@ export default function LoginPage() {
             </svg>
           </div>
           <h1 className="text-2xl font-bold text-gray-900">
-            CommentLink에 오신 것을 환영합니다
+            DMify에 오신 것을 환영합니다
           </h1>
           <p className="text-sm text-gray-500">
             서비스를 이용하려면 로그인해 주세요

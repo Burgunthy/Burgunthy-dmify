@@ -63,7 +63,7 @@ export default function DashboardLayout({
         {/* Logo */}
         <div className="flex h-16 items-center gap-3 border-b border-white/10 px-6">
           <Link2 className="h-7 w-7 text-primary" />
-          <span className="text-lg font-bold text-white">CommentLink</span>
+          <span className="text-lg font-bold text-white">DMify</span>
           <button
             onClick={() => setSidebarOpen(false)}
             className="ml-auto rounded-lg p-1 text-sidebar-text hover:bg-white/10 lg:hidden"

@@ -13,7 +13,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "CommentLink — 인스타그램 댓글 자동 답장 & 제휴링크",
+  title: "DMify — 인스타그램 댓글 자동 답장 & 제휴링크",
   description:
     "인스타그램 댓글에 자동으로 답장하고, 팔로우 확인 후 제휴링크를 DM으로 발송하는 SaaS 플랫폼",
 };

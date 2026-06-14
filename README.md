@@ -1,4 +1,4 @@
-# CommentLink
+# DMify
 
 인스타그램 댓글 → 자동 팔로우 확인 → 제휴링크 DM 발송 SaaS
 
