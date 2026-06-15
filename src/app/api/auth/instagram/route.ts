@@ -31,6 +31,7 @@ export async function GET(request: NextRequest) {
   authorizeUrl.searchParams.set('response_type', 'code')
   authorizeUrl.searchParams.set('scope', SCOPES)
   authorizeUrl.searchParams.set('enable_fb_login', '1')
+  authorizeUrl.searchParams.set('force_reauth', 'true')
   authorizeUrl.searchParams.set('state', state)
 
   const response = NextResponse.redirect(authorizeUrl.toString())
