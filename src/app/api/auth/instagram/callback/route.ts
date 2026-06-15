@@ -16,7 +16,7 @@ export async function GET(request: NextRequest) {
   const errorParam = searchParams.get("error")
 
   const CLIENT_ID = getEnv("INSTAGRAM_CLIENT_ID")
-  const { [_ek]: APP_SECRET } = process.env as Record<string, string>
+  const APP_SECRET = (process.env as Record<string, string>)[_ek] || (() => { throw new Error("Missing META_APP_SECRET") })()
   const APP_URL = getEnv("NEXT_PUBLIC_APP_URL")
   const REDIRECT_URI = `${APP_URL}/api/auth/instagram/callback`
 
@@ -37,7 +37,9 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    // 1. Exchange code for short-lived access token via Instagram API
+    // 1. Exchange code for short-lived access token
+    // Official endpoint per Meta docs:
+    // https://developers.facebook.com/docs/instagram-platform/instagram-api/get-started
     const tokenResp = await fetch("https://api.instagram.com/oauth/access_token", {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -51,7 +53,14 @@ export async function GET(request: NextRequest) {
     })
     const tokenData = await tokenResp.json()
 
-    if (!tokenResp.ok || !tokenData.access_token) {
+    console.log("[ig callback] token response:", JSON.stringify(tokenData))
+
+    // Handle both response formats:
+    // Old format: { access_token, user_id }
+    // New format: { data: [{ access_token, user_id, permissions }] }
+    const tokenResult = Array.isArray(tokenData.data) ? tokenData.data[0] : tokenData
+
+    if (!tokenResp.ok || !tokenResult?.access_token) {
       console.error("[ig callback] Token exchange failed:", JSON.stringify(tokenData))
       console.error("[ig callback] redirect_uri sent:", REDIRECT_URI)
       console.error("[ig callback] client_id:", CLIENT_ID)
@@ -59,26 +68,30 @@ export async function GET(request: NextRequest) {
       return NextResponse.redirect(new URL(`/dashboard/accounts?error=token_failed&detail=${errMsg}`, request.url))
     }
 
-    const shortToken = tokenData.access_token
-    const igUserId = tokenData.user_id
+    const shortToken = tokenResult.access_token
+    const igUserId = tokenResult.user_id
 
     if (!igUserId) {
       console.error("[ig callback] No user_id in token response:", JSON.stringify(tokenData))
       return NextResponse.redirect(new URL("/dashboard/accounts?error=token_failed", request.url))
     }
 
-    // 2. Exchange for long-lived token (60 days) via Graph API
+    // 2. Exchange for long-lived token (60 days)
+    // Instagram Login uses graph.instagram.com (NOT graph.facebook.com)
+    // grant_type=ig_exchange_token (NOT fb_exchange_token)
     const longResp = await fetch(
-      `https://graph.facebook.com/v25.0/oauth/access_token?grant_type=fb_exchange_token&client_id=${CLIENT_ID}&client_secret=${APP_SECRET}&fb_exchange_token=${shortToken}`
+      `https://graph.instagram.com/access_token?grant_type=ig_exchange_token&client_secret=${APP_SECRET}&access_token=${shortToken}`
     )
     const longData = await longResp.json()
+    console.log("[ig callback] long-lived token response:", JSON.stringify(longData))
     const longToken = longData.access_token || shortToken
 
-    // 3. Get Instagram user details directly
+    // 3. Get Instagram user details
     const igDetailResp = await fetch(
-      `https://graph.facebook.com/v25.0/${igUserId}?fields=id,username,name,profile_picture_url,followers_count,media_count&access_token=${longToken}`
+      `https://graph.instagram.com/me?fields=id,username,name,profile_picture_url,account_type&access_token=${longToken}`
     )
     const igDetail = await igDetailResp.json()
+    console.log("[ig callback] IG detail response:", JSON.stringify(igDetail))
 
     if (igDetail.error) {
       console.error("[ig callback] IG detail failed:", JSON.stringify(igDetail))
