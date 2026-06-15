@@ -14,12 +14,12 @@ export async function GET(request: NextRequest) {
   const APP_URL = getEnv('NEXT_PUBLIC_APP_URL')
   const REDIRECT_URI = `${APP_URL}/api/auth/instagram/callback`
 
+  // Only scopes listed in official docs: https://developers.facebook.com/docs/instagram-platform/instagram-api-with-instagram-login/business-login
   const SCOPES = [
     'instagram_business_basic',
     'instagram_business_manage_messages',
     'instagram_business_manage_comments',
     'instagram_business_content_publish',
-    'instagram_business_manage_insights',
   ].join(',')
 
   const state = crypto.randomUUID()
