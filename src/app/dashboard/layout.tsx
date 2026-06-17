@@ -11,12 +11,14 @@ import {
   LogOut,
   Menu,
   X,
+  Image,
 } from "lucide-react"
 import { useState } from "react"
 import { createClient } from "@/lib/supabase/client"
 
 const navItems = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
+  { href: "/dashboard/posts", label: "Posts", icon: Image },
   { href: "/dashboard/products", label: "Products", icon: Package },
   { href: "/dashboard/accounts", label: "Accounts", icon: Users },
   { href: "/dashboard/settings", label: "Settings", icon: Settings },

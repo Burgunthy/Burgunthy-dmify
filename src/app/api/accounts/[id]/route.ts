@@ -42,6 +42,7 @@ export async function PATCH(request: NextRequest, context: RouteContext) {
       'public_reply_enabled',
       'follow_check_enabled',
       'private_reply_text',
+      'not_following_text',
       'is_active',
     ] as const
 

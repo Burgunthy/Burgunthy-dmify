@@ -11,6 +11,12 @@ import {
   Camera,
   ExternalLink,
   Loader2,
+  Settings,
+  X,
+  Save,
+  MessageSquare,
+  Send,
+  UserX,
 } from "lucide-react"
 
 interface Account {
@@ -31,6 +37,14 @@ interface Account {
   auto_sync_enabled: boolean
   created_at: string
   updated_at: string
+}
+
+interface AccountSettings {
+  public_reply_enabled: boolean
+  reply_comment_text: string
+  follow_check_enabled: boolean
+  private_reply_text: string
+  not_following_text: string
 }
 
 type OAuthStatus = {
@@ -68,6 +82,15 @@ function AccountsContent() {
   const [loading, setLoading] = useState(true)
   const [connecting, setConnecting] = useState(false)
   const [status, setStatus] = useState<OAuthStatus>(null)
+  const [editingAccount, setEditingAccount] = useState<Account | null>(null)
+  const [settings, setSettings] = useState<AccountSettings>({
+    public_reply_enabled: false,
+    reply_comment_text: "",
+    follow_check_enabled: false,
+    private_reply_text: "",
+    not_following_text: "",
+  })
+  const [saving, setSaving] = useState(false)
   const searchParams = useSearchParams()
   const router = useRouter()
 
@@ -120,6 +143,46 @@ function AccountsContent() {
       await fetchAccounts()
     } catch {
       alert("Failed to disconnect.")
+    }
+  }
+
+  const openSettings = (account: Account) => {
+    setEditingAccount(account)
+    setSettings({
+      public_reply_enabled: account.public_reply_enabled,
+      reply_comment_text: account.reply_comment_text || "",
+      follow_check_enabled: account.follow_check_enabled,
+      private_reply_text: account.private_reply_text || "",
+      not_following_text: account.not_following_text || "",
+    })
+  }
+
+  const handleSaveSettings = async () => {
+    if (!editingAccount) return
+    setSaving(true)
+    try {
+      const res = await fetch(`/api/accounts/${editingAccount.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          public_reply_enabled: settings.public_reply_enabled,
+          reply_comment_text: settings.reply_comment_text || null,
+          follow_check_enabled: settings.follow_check_enabled,
+          private_reply_text: settings.private_reply_text || null,
+          not_following_text: settings.not_following_text || null,
+        }),
+      })
+      if (!res.ok) {
+        const err = await res.json()
+        alert(err.error || "설정 저장에 실패했습니다.")
+        return
+      }
+      setEditingAccount(null)
+      await fetchAccounts()
+    } catch {
+      alert("설정 저장에 실패했습니다.")
+    } finally {
+      setSaving(false)
     }
   }
 
@@ -249,6 +312,13 @@ function AccountsContent() {
                 )}
               </div>
               <div className="flex items-center gap-1">
+                <button
+                  onClick={() => openSettings(account)}
+                  className="rounded-lg p-2 text-zinc-400 transition-colors hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800 dark:hover:text-zinc-300"
+                  title="설정"
+                >
+                  <Settings className="h-4 w-4" />
+                </button>
                 <a
                   href={`https://instagram.com/${account.ig_username}`}
                   target="_blank"
@@ -289,6 +359,194 @@ function AccountsContent() {
           </li>
         </ul>
       </div>
+
+      {/* Settings Modal */}
+      {editingAccount && (
+        <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/50 p-4 pt-20">
+          <div className="w-full max-w-lg rounded-2xl bg-white shadow-xl dark:bg-zinc-900">
+            {/* Modal Header */}
+            <div className="flex items-center justify-between border-b border-zinc-200 p-5 dark:border-zinc-800">
+              <div>
+                <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-100">
+                  계정 설정
+                </h2>
+                <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                  @{editingAccount.ig_username}
+                </p>
+              </div>
+              <button
+                onClick={() => setEditingAccount(null)}
+                className="rounded-lg p-2 text-zinc-400 transition-colors hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            {/* Modal Body */}
+            <div className="space-y-5 p-5">
+              {/* Public Reply Toggle */}
+              <div className="rounded-xl border border-zinc-200 bg-zinc-50 p-4 dark:border-zinc-800 dark:bg-zinc-900/50">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className="rounded-lg bg-blue-100 p-2 dark:bg-blue-900/20">
+                      <MessageSquare className="h-5 w-5 text-blue-600 dark:text-blue-400" />
+                    </div>
+                    <div>
+                      <h3 className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">
+                        공개 댓글 답장
+                      </h3>
+                      <p className="text-xs text-zinc-500">
+                        댓글에 공개 답장을 남깁니다
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() =>
+                      setSettings((prev) => ({
+                        ...prev,
+                        public_reply_enabled: !prev.public_reply_enabled,
+                      }))
+                    }
+                    className={`relative h-6 w-11 rounded-full transition-colors ${
+                      settings.public_reply_enabled
+                        ? "bg-primary"
+                        : "bg-zinc-300 dark:bg-zinc-600"
+                    }`}
+                  >
+                    <span
+                      className={`absolute top-0.5 left-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform ${
+                        settings.public_reply_enabled
+                          ? "translate-x-5"
+                          : "translate-x-0"
+                      }`}
+                    />
+                  </button>
+                </div>
+
+                {/* Reply Comment Text */}
+                {settings.public_reply_enabled && (
+                  <div className="mt-4">
+                    <label className="mb-1.5 block text-xs font-medium text-zinc-700 dark:text-zinc-300">
+                      공개 답장 내용
+                    </label>
+                    <textarea
+                      value={settings.reply_comment_text}
+                      onChange={(e) =>
+                        setSettings((prev) => ({
+                          ...prev,
+                          reply_comment_text: e.target.value,
+                        }))
+                      }
+                      rows={3}
+                      className="w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm text-zinc-900 placeholder-zinc-400 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100"
+                      placeholder="공개 댓글로 남길 답장 내용을 입력하세요..."
+                    />
+                  </div>
+                )}
+              </div>
+
+              {/* Follow Check / DM Toggle */}
+              <div className="rounded-xl border border-zinc-200 bg-zinc-50 p-4 dark:border-zinc-800 dark:bg-zinc-900/50">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className="rounded-lg bg-emerald-100 p-2 dark:bg-emerald-900/20">
+                      <Send className="h-5 w-5 text-emerald-600 dark:text-emerald-400" />
+                    </div>
+                    <div>
+                      <h3 className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">
+                        DM 자동 발송
+                      </h3>
+                      <p className="text-xs text-zinc-500">
+                        팔로워 여부 확인 후 DM을 발송합니다
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() =>
+                      setSettings((prev) => ({
+                        ...prev,
+                        follow_check_enabled: !prev.follow_check_enabled,
+                      }))
+                    }
+                    className={`relative h-6 w-11 rounded-full transition-colors ${
+                      settings.follow_check_enabled
+                        ? "bg-primary"
+                        : "bg-zinc-300 dark:bg-zinc-600"
+                    }`}
+                  >
+                    <span
+                      className={`absolute top-0.5 left-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform ${
+                        settings.follow_check_enabled
+                          ? "translate-x-5"
+                          : "translate-x-0"
+                      }`}
+                    />
+                  </button>
+                </div>
+
+                {/* DM Settings */}
+                {settings.follow_check_enabled && (
+                  <div className="mt-4 space-y-4">
+                    <div>
+                      <label className="mb-1.5 block text-xs font-medium text-zinc-700 dark:text-zinc-300">
+                        팔로워 DM 메시지
+                      </label>
+                      <textarea
+                        value={settings.private_reply_text}
+                        onChange={(e) =>
+                          setSettings((prev) => ({
+                            ...prev,
+                            private_reply_text: e.target.value,
+                          }))
+                        }
+                        rows={4}
+                        className="w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm text-zinc-900 placeholder-zinc-400 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100"
+                        placeholder="팔로워에게 보낼 DM 메시지를 입력하세요..."
+                      />
+                    </div>
+                    <div>
+                      <label className="mb-1.5 flex items-center gap-1.5 text-xs font-medium text-zinc-700 dark:text-zinc-300">
+                        <UserX className="h-3.5 w-3.5 text-amber-500" />
+                        비팔로워 DM 메시지
+                      </label>
+                      <textarea
+                        value={settings.not_following_text}
+                        onChange={(e) =>
+                          setSettings((prev) => ({
+                            ...prev,
+                            not_following_text: e.target.value,
+                          }))
+                        }
+                        rows={3}
+                        className="w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm text-zinc-900 placeholder-zinc-400 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100"
+                        placeholder="비팔로워에게 보낼 DM 메시지 (선택사항)"
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Modal Footer */}
+            <div className="flex items-center justify-end gap-3 border-t border-zinc-200 p-5 dark:border-zinc-800">
+              <button
+                onClick={() => setEditingAccount(null)}
+                className="rounded-lg border border-zinc-200 px-4 py-2 text-sm font-medium text-zinc-700 transition-colors hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
+              >
+                취소
+              </button>
+              <button
+                onClick={handleSaveSettings}
+                disabled={saving}
+                className="flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-primary-hover disabled:opacity-60"
+              >
+                <Save className="h-4 w-4" />
+                {saving ? "저장 중..." : "저장"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
