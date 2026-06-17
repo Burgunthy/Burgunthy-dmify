@@ -86,12 +86,87 @@ interface AccountRow {
   public_reply_enabled: boolean
   follow_check_enabled: boolean
   private_reply_text: string
+  not_following_text: string | null
+}
+
+interface PostKeywordRow {
+  id: string
+  keyword: string
+  dm_message: string | null
+  dm_link_url: string | null
+  not_following_dm: string | null
+  not_following_link: string | null
+  sort_order: number
 }
 
 interface PostRow {
   id: string
   account_id: string
+  media_id: string
+  dm_message: string | null
+  dm_link_url: string | null
+  public_reply_text: string | null
+  not_following_dm: string | null
+  not_following_link: string | null
   accounts: AccountRow
+}
+
+/**
+ * Build the final DM message with priority:
+ *   keyword match > post-level setting > account-level fallback
+ */
+function buildDmMessage(
+  account: AccountRow,
+  post: PostRow,
+  matchedKeyword: PostKeywordRow | undefined,
+  isFollower: boolean
+): string {
+  let dmMessage: string
+  let linkUrl: string
+
+  if (isFollower) {
+    dmMessage =
+      matchedKeyword?.dm_message ||
+      post.dm_message ||
+      account.private_reply_text ||
+      ''
+    linkUrl =
+      matchedKeyword?.dm_link_url ||
+      post.dm_link_url ||
+      ''
+  } else {
+    dmMessage =
+      matchedKeyword?.not_following_dm ||
+      post.not_following_dm ||
+      account.not_following_text ||
+      matchedKeyword?.dm_message ||
+      post.dm_message ||
+      account.private_reply_text ||
+      ''
+    linkUrl =
+      matchedKeyword?.not_following_link ||
+      post.not_following_link ||
+      matchedKeyword?.dm_link_url ||
+      post.dm_link_url ||
+      ''
+  }
+
+  if (linkUrl && dmMessage) {
+    dmMessage = dmMessage + '\n\n🔗 ' + linkUrl
+  }
+
+  return dmMessage
+}
+
+/**
+ * Build the public reply text with priority:
+ *   post-level override > account-level setting
+ */
+function buildPublicReply(
+  account: AccountRow,
+  post: PostRow
+): string | null {
+  return post.public_reply_text || account.reply_comment_text || null
 }
 
 async function handleComment(supabase: SupabaseClient, value: WebhookCommentValue) {
@@ -106,10 +181,13 @@ async function handleComment(supabase: SupabaseClient, value: WebhookCommentValu
   processedComments.add(commentId)
   setTimeout(() => processedComments.delete(commentId), DEDUP_TTL_MS)
 
-  // Find account by media_id
+  // Find post by media_id with account join and post-level settings
   const { data: post } = await supabase
     .from('posts')
-    .select('id, account_id, accounts!inner(id, access_token, ig_username, reply_comment_text, public_reply_enabled, follow_check_enabled, private_reply_text)')
+    .select(
+      `id, account_id, media_id, dm_message, dm_link_url, public_reply_text, not_following_dm, not_following_link, ` +
+      `accounts!inner(id, access_token, ig_username, reply_comment_text, public_reply_enabled, follow_check_enabled, private_reply_text, not_following_text)`
+    )
     .eq('media_id', mediaId)
     .eq('is_active', true)
     .single()
@@ -142,11 +220,26 @@ async function handleComment(supabase: SupabaseClient, value: WebhookCommentValu
     status: 'received',
   })
 
+  // Check for keyword matches (highest priority)
+  const { data: keywords } = await supabase
+    .from('post_keywords')
+    .select('*')
+    .eq('post_id', typedPost.id)
+    .order('sort_order', { ascending: true })
+
+  const matchedKeyword = (keywords as PostKeywordRow[] | null)?.find(kw =>
+    commentText.toLowerCase().includes(kw.keyword.toLowerCase())
+  )
+
+  // Follow check (simplified — in production, use Instagram API)
+  const isFollower = true // Default to true; implement actual follow check as needed
+
   // Step 1: Public reply to comment
-  if (account.public_reply_enabled && account.reply_comment_text) {
+  const publicReplyText = buildPublicReply(account, typedPost)
+  if (account.public_reply_enabled && publicReplyText) {
     await igApi(`${mediaId}/comments`, {
       access_token: account.access_token,
-      message: `@${username} ${account.reply_comment_text}`,
+      message: `@${username} ${publicReplyText}`,
     }, 'POST')
 
     await supabase.from('conversations')
@@ -154,18 +247,24 @@ async function handleComment(supabase: SupabaseClient, value: WebhookCommentValu
       .eq('comment_id', commentId)
   }
 
-  // Step 2: Private Reply with follow check button
+  // Step 2: Private DM reply
   if (account.follow_check_enabled) {
-    await igApi('me/message_threads', {
-      access_token: account.access_token,
-      recipient: igUserId,
-      message: account.private_reply_text,
-    }, 'POST')
+    const dmMessage = buildDmMessage(account, typedPost, matchedKeyword, isFollower)
+
+    if (dmMessage) {
+      await igApi('me/message_threads', {
+        access_token: account.access_token,
+        recipient: igUserId,
+        message: dmMessage,
+      }, 'POST')
+    }
 
     await supabase.from('conversations')
       .update({ status: 'confirmed' })
       .eq('comment_id', commentId)
   }
 
-  console.log(`[webhook] Processed comment ${commentId} from @${username}`)
+  console.log(`[webhook] Processed comment ${commentId} from @${username}` +
+    (matchedKeyword ? ` [keyword: "${matchedKeyword.keyword}"]` : '') +
+    ` [follower: ${isFollower}]`)
 }

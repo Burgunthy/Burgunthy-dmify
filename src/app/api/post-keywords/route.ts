@@ -1,41 +1,21 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getServiceClient } from '@/lib/supabase/server'
 
-// GET /api/posts — list posts with account info
+// GET /api/post-keywords?post_id=xxx — list keywords for a post
 export async function GET(request: NextRequest) {
   try {
+    const postId = request.nextUrl.searchParams.get('post_id')
+    if (!postId) {
+      return NextResponse.json({ error: 'post_id is required.' }, { status: 400 })
+    }
+
     const supabase = await getServiceClient()
 
-    // Optional filters via query params
-    const { searchParams } = request.nextUrl
-    const accountId = searchParams.get('account_id')
-    const isActive = searchParams.get('is_active')
-
-    let query = supabase
-      .from('posts')
-      .select(`
-        *,
-        accounts (
-          id,
-          ig_username,
-          is_active
-        ),
-        products (
-          id,
-          name,
-          link_url
-        )
-      `)
-      .order('created_at', { ascending: false })
-
-    if (accountId) {
-      query = query.eq('account_id', accountId)
-    }
-    if (isActive !== null) {
-      query = query.eq('is_active', isActive === 'true')
-    }
-
-    const { data, error } = await query
+    const { data, error } = await supabase
+      .from('post_keywords')
+      .select('*')
+      .eq('post_id', postId)
+      .order('sort_order', { ascending: true })
 
     if (error) {
       return NextResponse.json({ error: error.message }, { status: 400 })
@@ -43,68 +23,61 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json({ data })
   } catch (err) {
-    console.error('[posts GET]', err)
+    console.error('[post-keywords GET]', err)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }
 
-// POST /api/posts — register a new post for monitoring
+// POST /api/post-keywords — add a keyword
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json()
     const {
-      account_id,
-      media_id,
-      media_type,
-      caption,
-      media_url,
+      post_id,
+      keyword,
       dm_message,
       dm_link_url,
-      public_reply_text,
       not_following_dm,
       not_following_link,
     } = body as {
-      account_id?: string
-      media_id?: string
-      media_type?: string
-      caption?: string | null
-      media_url?: string | null
+      post_id?: string
+      keyword?: string
       dm_message?: string | null
       dm_link_url?: string | null
-      public_reply_text?: string | null
       not_following_dm?: string | null
       not_following_link?: string | null
     }
 
-    if (!account_id || !media_id) {
+    if (!post_id || !keyword) {
       return NextResponse.json(
-        { error: 'account_id and media_id are required.' },
+        { error: 'post_id and keyword are required.' },
         { status: 400 }
       )
     }
 
     const supabase = await getServiceClient()
 
-    const upsertData: Record<string, unknown> = {
-      account_id,
-      media_id,
-      media_type: media_type || null,
-      caption: caption || null,
-      media_url: media_url || null,
-      is_active: true,
-    }
+    // Get max sort_order for this post
+    const { data: existing } = await supabase
+      .from('post_keywords')
+      .select('sort_order')
+      .eq('post_id', post_id)
+      .order('sort_order', { ascending: false })
+      .limit(1)
 
-    // Only include post-level settings if explicitly provided
-    if (dm_message !== undefined) upsertData.dm_message = dm_message || null
-    if (dm_link_url !== undefined) upsertData.dm_link_url = dm_link_url || null
-    if (public_reply_text !== undefined) upsertData.public_reply_text = public_reply_text || null
-    if (not_following_dm !== undefined) upsertData.not_following_dm = not_following_dm || null
-    if (not_following_link !== undefined) upsertData.not_following_link = not_following_link || null
+    const nextSortOrder = existing && existing.length > 0 ? (existing[0].sort_order ?? 0) + 1 : 0
 
-    // Upsert: insert new post or update if already exists
     const { data, error } = await supabase
-      .from('posts')
-      .upsert(upsertData, { onConflict: 'account_id,media_id' })
+      .from('post_keywords')
+      .insert({
+        post_id,
+        keyword,
+        dm_message: dm_message || null,
+        dm_link_url: dm_link_url || null,
+        not_following_dm: not_following_dm || null,
+        not_following_link: not_following_link || null,
+        sort_order: nextSortOrder,
+      })
       .select()
       .single()
 
@@ -114,56 +87,53 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({ data }, { status: 201 })
   } catch (err) {
-    console.error('[posts POST]', err)
+    console.error('[post-keywords POST]', err)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }
 
-// PATCH /api/posts — toggle is_active or update post-level settings
+// PATCH /api/post-keywords — update a keyword
 export async function PATCH(request: NextRequest) {
   try {
     const body = await request.json()
     const {
       id,
-      is_active,
+      keyword,
       dm_message,
       dm_link_url,
-      public_reply_text,
       not_following_dm,
       not_following_link,
+      sort_order,
     } = body as {
       id?: string
-      is_active?: boolean
+      keyword?: string
       dm_message?: string | null
       dm_link_url?: string | null
-      public_reply_text?: string | null
       not_following_dm?: string | null
       not_following_link?: string | null
+      sort_order?: number
     }
 
     if (!id) {
-      return NextResponse.json(
-        { error: 'id is required.' },
-        { status: 400 }
-      )
+      return NextResponse.json({ error: 'id is required.' }, { status: 400 })
     }
 
     const supabase = await getServiceClient()
 
     const updateData: Record<string, unknown> = {}
-    if (is_active !== undefined) updateData.is_active = is_active
+    if (keyword !== undefined) updateData.keyword = keyword
     if (dm_message !== undefined) updateData.dm_message = dm_message || null
     if (dm_link_url !== undefined) updateData.dm_link_url = dm_link_url || null
-    if (public_reply_text !== undefined) updateData.public_reply_text = public_reply_text || null
     if (not_following_dm !== undefined) updateData.not_following_dm = not_following_dm || null
     if (not_following_link !== undefined) updateData.not_following_link = not_following_link || null
+    if (sort_order !== undefined) updateData.sort_order = sort_order
 
     if (Object.keys(updateData).length === 0) {
       return NextResponse.json({ error: 'No fields to update.' }, { status: 400 })
     }
 
     const { data, error } = await supabase
-      .from('posts')
+      .from('post_keywords')
       .update(updateData)
       .eq('id', id)
       .select()
@@ -175,12 +145,12 @@ export async function PATCH(request: NextRequest) {
 
     return NextResponse.json({ data })
   } catch (err) {
-    console.error('[posts PATCH]', err)
+    console.error('[post-keywords PATCH]', err)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }
 
-// DELETE /api/posts — remove a post
+// DELETE /api/post-keywords — remove a keyword
 export async function DELETE(request: NextRequest) {
   try {
     const body = await request.json()
@@ -192,7 +162,7 @@ export async function DELETE(request: NextRequest) {
 
     const supabase = await getServiceClient()
 
-    const { error } = await supabase.from('posts').delete().eq('id', id)
+    const { error } = await supabase.from('post_keywords').delete().eq('id', id)
 
     if (error) {
       return NextResponse.json({ error: error.message }, { status: 400 })
@@ -200,7 +170,7 @@ export async function DELETE(request: NextRequest) {
 
     return NextResponse.json({ success: true })
   } catch (err) {
-    console.error('[posts DELETE]', err)
+    console.error('[post-keywords DELETE]', err)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }
