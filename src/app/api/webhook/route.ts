@@ -11,12 +11,45 @@ const VERIFY_TOKEN = process.env.META_VERIFY_TOKEN || 'dmify_verify'
 const processedComments = new Set<string>()
 const DEDUP_TTL_MS = 60_000 // 1 minute
 
-// Instagram Graph API
-function igApi(path: string, params: Record<string, string>, method = 'GET') {
+// Instagram Graph API. `params` always go in the query string (works for both
+// GET and the comment-reply POST). Pass `body` for endpoints such as
+// /me/messages that require a JSON request body instead of query params.
+function igApi(
+  path: string,
+  params: Record<string, string>,
+  method: 'GET' | 'POST' = 'GET',
+  body?: Record<string, unknown>
+) {
   const url = new URL(`https://graph.instagram.com/v25.0/${path}`)
   Object.entries(params).forEach(([k, v]) => url.searchParams.set(k, v))
-  const options: RequestInit = method === 'POST' ? { method: 'POST' } : {}
+
+  const options: RequestInit = { method }
+  if (method === 'POST' && body) {
+    options.headers = { 'Content-Type': 'application/json' }
+    options.body = JSON.stringify(body)
+  }
   return fetch(url.toString(), options).then(r => r.json())
+}
+
+// Check whether `igUserId` follows the account, using the friendship_status
+// field. Falls back to true (treat as follower) on any error or unexpected
+// response so a transient Graph API failure never blocks DM delivery.
+async function checkIsFollower(igUserId: string, accessToken: string): Promise<boolean> {
+  try {
+    const res = (await igApi(igUserId, {
+      fields: 'friendship_status',
+      access_token: accessToken,
+    })) as { friendship_status?: { followed_by?: boolean }; error?: unknown }
+
+    if (res.error || !res.friendship_status) {
+      console.log('[webhook] follower check failed, defaulting to true:', JSON.stringify(res))
+      return true
+    }
+    return res.friendship_status.followed_by === true
+  } catch (err) {
+    console.log('[webhook] follower check threw, defaulting to true:', err)
+    return true
+  }
 }
 
 // Verify webhook signature
@@ -231,8 +264,12 @@ async function handleComment(supabase: SupabaseClient, value: WebhookCommentValu
     commentText.toLowerCase().includes(kw.keyword.toLowerCase())
   )
 
-  // Follow check (simplified — in production, use Instagram API)
-  const isFollower = true // Default to true; implement actual follow check as needed
+  // Follow check via Instagram Graph API (defaults to true on error).
+  // Only run it when follow-gating is on; it's only used for DM routing.
+  let isFollower = true
+  if (account.follow_check_enabled) {
+    isFollower = await checkIsFollower(igUserId, account.access_token)
+  }
 
   // Step 1: Public reply to comment
   const publicReplyText = buildPublicReply(account, typedPost)
@@ -252,11 +289,15 @@ async function handleComment(supabase: SupabaseClient, value: WebhookCommentValu
     const dmMessage = buildDmMessage(account, typedPost, matchedKeyword, isFollower)
 
     if (dmMessage) {
-      await igApi('me/message_threads', {
-        access_token: account.access_token,
-        recipient: igUserId,
-        message: dmMessage,
-      }, 'POST')
+      await igApi(
+        'me/messages',
+        { access_token: account.access_token },
+        'POST',
+        {
+          recipient: { id: igUserId },
+          message: { text: dmMessage },
+        }
+      )
     }
 
     await supabase.from('conversations')
