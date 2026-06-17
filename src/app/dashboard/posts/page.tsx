@@ -12,6 +12,12 @@ import {
   RefreshCw,
   CheckCircle2,
   XCircle,
+  Settings2,
+  Link2,
+  MessageSquare,
+  Tag,
+  UserCheck,
+  UserX,
 } from "lucide-react"
 
 interface Account {
@@ -28,6 +34,11 @@ interface RegisteredPost {
   caption: string | null
   media_url: string | null
   is_active: boolean
+  dm_message: string | null
+  dm_link_url: string | null
+  public_reply_text: string | null
+  not_following_dm: string | null
+  not_following_link: string | null
   created_at: string
   accounts: { id: string; ig_username: string } | null
 }
@@ -43,6 +54,25 @@ interface IgMedia {
   permalink: string
 }
 
+interface PostKeyword {
+  id: string
+  post_id: string
+  keyword: string
+  dm_message: string | null
+  dm_link_url: string | null
+  not_following_dm: string | null
+  not_following_link: string | null
+  sort_order: number
+}
+
+interface PostSettingsForm {
+  dm_message: string
+  dm_link_url: string
+  public_reply_text: string
+  not_following_dm: string
+  not_following_link: string
+}
+
 export default function PostsPage() {
   const [accounts, setAccounts] = useState<Account[]>([])
   const [selectedAccountId, setSelectedAccountId] = useState<string>("")
@@ -50,8 +80,28 @@ export default function PostsPage() {
   const [igMedia, setIgMedia] = useState<IgMedia[]>([])
   const [loading, setLoading] = useState(true)
   const [loadingMedia, setLoadingMedia] = useState(false)
-  const [saving, setSaving] = useState<string | null>(null) // media_id being registered
+  const [saving, setSaving] = useState<string | null>(null)
   const [showMediaPicker, setShowMediaPicker] = useState(false)
+
+  // Post settings modal
+  const [showSettings, setShowSettings] = useState(false)
+  const [settingsPost, setSettingsPost] = useState<RegisteredPost | null>(null)
+  const [settingsForm, setSettingsForm] = useState<PostSettingsForm>({
+    dm_message: "",
+    dm_link_url: "",
+    public_reply_text: "",
+    not_following_dm: "",
+    not_following_link: "",
+  })
+  const [settingsSaving, setSettingsSaving] = useState(false)
+
+  // Keywords
+  const [keywords, setKeywords] = useState<PostKeyword[]>([])
+  const [newKeyword, setNewKeyword] = useState("")
+  const [newKwDm, setNewKwDm] = useState("")
+  const [newKwLink, setNewKwLink] = useState("")
+  const [newKwNotDm, setNewKwNotDm] = useState("")
+  const [newKwNotLink, setNewKwNotLink] = useState("")
 
   useEffect(() => {
     fetchAccounts()
@@ -134,7 +184,6 @@ export default function PostsPage() {
         alert(err.error || "게시물 등록에 실패했습니다.")
         return
       }
-      // Remove from picker list
       setIgMedia((prev) => prev.filter((m) => m.id !== media.id))
       await fetchRegisteredPosts()
     } catch {
@@ -169,6 +218,101 @@ export default function PostsPage() {
       })
       if (res.ok) {
         await fetchRegisteredPosts()
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  // --- Post Settings ---
+
+  const openSettings = async (post: RegisteredPost) => {
+    setSettingsPost(post)
+    setSettingsForm({
+      dm_message: post.dm_message || "",
+      dm_link_url: post.dm_link_url || "",
+      public_reply_text: post.public_reply_text || "",
+      not_following_dm: post.not_following_dm || "",
+      not_following_link: post.not_following_link || "",
+    })
+    setShowSettings(true)
+    // Fetch keywords
+    try {
+      const res = await fetch(`/api/post-keywords?post_id=${post.id}`)
+      if (res.ok) {
+        const json = await res.json()
+        setKeywords(json.data || [])
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  const saveSettings = async () => {
+    if (!settingsPost) return
+    setSettingsSaving(true)
+    try {
+      const res = await fetch("/api/posts", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          id: settingsPost.id,
+          dm_message: settingsForm.dm_message || null,
+          dm_link_url: settingsForm.dm_link_url || null,
+          public_reply_text: settingsForm.public_reply_text || null,
+          not_following_dm: settingsForm.not_following_dm || null,
+          not_following_link: settingsForm.not_following_link || null,
+        }),
+      })
+      if (res.ok) {
+        await fetchRegisteredPosts()
+        setShowSettings(false)
+      }
+    } catch {
+      alert("설정 저장에 실패했습니다.")
+    } finally {
+      setSettingsSaving(false)
+    }
+  }
+
+  const addKeyword = async () => {
+    if (!settingsPost || !newKeyword.trim()) return
+    try {
+      const res = await fetch("/api/post-keywords", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          post_id: settingsPost.id,
+          keyword: newKeyword.trim(),
+          dm_message: newKwDm || null,
+          dm_link_url: newKwLink || null,
+          not_following_dm: newKwNotDm || null,
+          not_following_link: newKwNotLink || null,
+        }),
+      })
+      if (res.ok) {
+        const json = await res.json()
+        setKeywords((prev) => [...prev, json.data])
+        setNewKeyword("")
+        setNewKwDm("")
+        setNewKwLink("")
+        setNewKwNotDm("")
+        setNewKwNotLink("")
+      }
+    } catch {
+      alert("키워드 추가에 실패했습니다.")
+    }
+  }
+
+  const deleteKeyword = async (id: string) => {
+    try {
+      const res = await fetch("/api/post-keywords", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id }),
+      })
+      if (res.ok) {
+        setKeywords((prev) => prev.filter((kw) => kw.id !== id))
       }
     } catch {
       // ignore
@@ -229,7 +373,6 @@ export default function PostsPage() {
           </p>
         </div>
         <div className="flex items-center gap-3">
-          {/* Account selector */}
           <select
             value={selectedAccountId}
             onChange={(e) => setSelectedAccountId(e.target.value)}
@@ -299,11 +442,7 @@ export default function PostsPage() {
                       >
                         {thumb ? (
                           <div className="aspect-square w-full overflow-hidden bg-zinc-100 dark:bg-zinc-800">
-                            <img
-                              src={thumb}
-                              alt=""
-                              className="h-full w-full object-cover"
-                            />
+                            <img src={thumb} alt="" className="h-full w-full object-cover" />
                           </div>
                         ) : (
                           <div className="flex aspect-square items-center justify-center bg-zinc-100 dark:bg-zinc-800">
@@ -360,6 +499,232 @@ export default function PostsPage() {
         </div>
       )}
 
+      {/* Post Settings Modal */}
+      {showSettings && settingsPost && (
+        <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/50 p-4 pt-16">
+          <div className="w-full max-w-2xl rounded-2xl bg-white shadow-xl dark:bg-zinc-900">
+            <div className="flex items-center justify-between border-b border-zinc-200 p-5 dark:border-zinc-800">
+              <div>
+                <h2 className="text-lg font-semibold text-zinc-900 dark:text-zinc-100">
+                  게시물 설정
+                </h2>
+                <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                  {truncateCaption(settingsPost.caption, 50)}
+                </p>
+              </div>
+              <button
+                onClick={() => setShowSettings(false)}
+                className="rounded-lg p-2 text-zinc-400 transition-colors hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800"
+              >
+                <XCircle className="h-5 w-5" />
+              </button>
+            </div>
+
+            <div className="max-h-[70vh] space-y-6 overflow-y-auto p-5">
+              {/* Default DM Message */}
+              <div>
+                <label className="mb-2 flex items-center gap-2 text-sm font-medium text-zinc-700 dark:text-zinc-300">
+                  <MessageSquare className="h-4 w-4" />
+                  기본 DM 메시지
+                </label>
+                <textarea
+                  value={settingsForm.dm_message}
+                  onChange={(e) => setSettingsForm((p) => ({ ...p, dm_message: e.target.value }))}
+                  rows={3}
+                  placeholder="댓글 작성자에게 보낼 DM 메시지 (미설정 시 계정 기본값 사용)"
+                  className="w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm text-zinc-900 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100"
+                />
+              </div>
+
+              {/* DM Link URL */}
+              <div>
+                <label className="mb-2 flex items-center gap-2 text-sm font-medium text-zinc-700 dark:text-zinc-300">
+                  <Link2 className="h-4 w-4" />
+                  DM 링크 URL
+                </label>
+                <input
+                  type="url"
+                  value={settingsForm.dm_link_url}
+                  onChange={(e) => setSettingsForm((p) => ({ ...p, dm_link_url: e.target.value }))}
+                  placeholder="https://example.com/product (DM 메시지에 자동 포함)"
+                  className="w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm text-zinc-900 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100"
+                />
+              </div>
+
+              {/* Public Reply Override */}
+              <div>
+                <label className="mb-2 flex items-center gap-2 text-sm font-medium text-zinc-700 dark:text-zinc-300">
+                  <ExternalLink className="h-4 w-4" />
+                  공개 댓글 답장 (게시물 오버라이드)
+                </label>
+                <input
+                  type="text"
+                  value={settingsForm.public_reply_text}
+                  onChange={(e) => setSettingsForm((p) => ({ ...p, public_reply_text: e.target.value }))}
+                  placeholder="미설정 시 계정 기본값 사용"
+                  className="w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm text-zinc-900 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100"
+                />
+              </div>
+
+              {/* Divider */}
+              <hr className="border-zinc-200 dark:border-zinc-800" />
+
+              {/* Not Following Section */}
+              <div>
+                <h3 className="mb-3 flex items-center gap-2 text-sm font-semibold text-zinc-700 dark:text-zinc-300">
+                  <UserX className="h-4 w-4 text-amber-500" />
+                  비팔로워 전용
+                </h3>
+                <div className="space-y-3">
+                  <textarea
+                    value={settingsForm.not_following_dm}
+                    onChange={(e) => setSettingsForm((p) => ({ ...p, not_following_dm: e.target.value }))}
+                    rows={3}
+                    placeholder="비팔로워에게 보낼 DM 메시지 (미설정 시 기본 DM 사용)"
+                    className="w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm text-zinc-900 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100"
+                  />
+                  <input
+                    type="url"
+                    value={settingsForm.not_following_link}
+                    onChange={(e) => setSettingsForm((p) => ({ ...p, not_following_link: e.target.value }))}
+                    placeholder="비팔로워 전용 링크 URL"
+                    className="w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm text-zinc-900 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100"
+                  />
+                </div>
+              </div>
+
+              {/* Divider */}
+              <hr className="border-zinc-200 dark:border-zinc-800" />
+
+              {/* Keywords Section */}
+              <div>
+                <h3 className="mb-1 flex items-center gap-2 text-sm font-semibold text-zinc-700 dark:text-zinc-300">
+                  <Tag className="h-4 w-4 text-primary" />
+                  키워드별 자동 응답
+                </h3>
+                <p className="mb-3 text-xs text-zinc-400">
+                  댓글에 키워드가 포함되면 지정한 메시지/링크를 전송합니다
+                </p>
+
+                {/* Existing keywords */}
+                {keywords.length > 0 && (
+                  <div className="mb-4 space-y-2">
+                    {keywords.map((kw) => (
+                      <div
+                        key={kw.id}
+                        className="flex items-start gap-3 rounded-lg border border-zinc-200 bg-zinc-50 p-3 dark:border-zinc-800 dark:bg-zinc-800/50"
+                      >
+                        <span className="mt-0.5 shrink-0 rounded bg-primary/10 px-2 py-0.5 text-xs font-semibold text-primary">
+                          {kw.keyword}
+                        </span>
+                        <div className="min-w-0 flex-1 space-y-1">
+                          {kw.dm_message && (
+                            <p className="truncate text-xs text-zinc-600 dark:text-zinc-400">
+                              DM: {kw.dm_message}
+                            </p>
+                          )}
+                          {kw.dm_link_url && (
+                            <p className="truncate text-xs text-primary">
+                              🔗 {kw.dm_link_url}
+                            </p>
+                          )}
+                          {kw.not_following_dm && (
+                            <p className="truncate text-xs text-amber-600 dark:text-amber-400">
+                              비팔로워 DM: {kw.not_following_dm}
+                            </p>
+                          )}
+                        </div>
+                        <button
+                          onClick={() => deleteKeyword(kw.id)}
+                          className="shrink-0 rounded p-1 text-zinc-400 transition-colors hover:bg-red-50 hover:text-red-500 dark:hover:bg-red-900/20"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* Add new keyword */}
+                <div className="space-y-3 rounded-lg border border-dashed border-zinc-300 p-3 dark:border-zinc-700">
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={newKeyword}
+                      onChange={(e) => setNewKeyword(e.target.value)}
+                      placeholder="키워드 (예: 링크, 사이즈, 가격)"
+                      className="flex-1 rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm text-zinc-900 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100"
+                    />
+                    <button
+                      onClick={addKeyword}
+                      disabled={!newKeyword.trim()}
+                      className="flex items-center gap-1 rounded-lg bg-primary px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-primary-hover disabled:opacity-40"
+                    >
+                      <Plus className="h-4 w-4" />
+                      추가
+                    </button>
+                  </div>
+                  {newKeyword.trim() && (
+                    <div className="space-y-2">
+                      <input
+                        type="text"
+                        value={newKwDm}
+                        onChange={(e) => setNewKwDm(e.target.value)}
+                        placeholder="DM 메시지"
+                        className="w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-xs text-zinc-900 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100"
+                      />
+                      <input
+                        type="url"
+                        value={newKwLink}
+                        onChange={(e) => setNewKwLink(e.target.value)}
+                        placeholder="링크 URL"
+                        className="w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-xs text-zinc-900 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100"
+                      />
+                      <div className="flex items-center gap-2 text-xs text-amber-600">
+                        <UserX className="h-3 w-3" />
+                        <span>비팔로워 전용</span>
+                      </div>
+                      <input
+                        type="text"
+                        value={newKwNotDm}
+                        onChange={(e) => setNewKwNotDm(e.target.value)}
+                        placeholder="비팔로워 DM 메시지"
+                        className="w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-xs text-zinc-900 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100"
+                      />
+                      <input
+                        type="url"
+                        value={newKwNotLink}
+                        onChange={(e) => setNewKwNotLink(e.target.value)}
+                        placeholder="비팔로워 링크 URL"
+                        className="w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-xs text-zinc-900 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100"
+                      />
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* Footer */}
+            <div className="flex justify-end gap-3 border-t border-zinc-200 p-5 dark:border-zinc-800">
+              <button
+                onClick={() => setShowSettings(false)}
+                className="rounded-lg border border-zinc-200 px-4 py-2 text-sm font-medium text-zinc-700 hover:bg-zinc-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
+              >
+                취소
+              </button>
+              <button
+                onClick={saveSettings}
+                disabled={settingsSaving}
+                className="flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-primary-hover disabled:opacity-60"
+              >
+                {settingsSaving && <Loader2 className="h-4 w-4 animate-spin" />}
+                저장
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Registered Posts List */}
       {registeredPosts.length === 0 ? (
         <div className="flex flex-col items-center justify-center rounded-xl border border-dashed border-zinc-300 bg-white py-16 dark:border-zinc-700 dark:bg-zinc-900">
@@ -387,11 +752,7 @@ export default function PostsPage() {
                 {/* Thumbnail */}
                 {thumb ? (
                   <div className="h-14 w-14 shrink-0 overflow-hidden rounded-lg bg-zinc-100 dark:bg-zinc-800">
-                    <img
-                      src={thumb}
-                      alt=""
-                      className="h-full w-full object-cover"
-                    />
+                    <img src={thumb} alt="" className="h-full w-full object-cover" />
                   </div>
                 ) : (
                   <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-lg bg-zinc-100 dark:bg-zinc-800">
@@ -414,6 +775,18 @@ export default function PostsPage() {
                     <span className="rounded-full bg-zinc-100 px-2 py-0.5 text-xs text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400">
                       {post.media_type === "VIDEO" ? "영상" : post.media_type === "CAROUSEL_ALBUM" ? "캐러셀" : "이미지"}
                     </span>
+                    {post.dm_link_url && (
+                      <span className="flex items-center gap-1 rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">
+                        <Link2 className="h-3 w-3" />
+                        링크
+                      </span>
+                    )}
+                    {post.dm_message && (
+                      <span className="flex items-center gap-1 rounded-full bg-blue-50 px-2 py-0.5 text-xs font-medium text-blue-600 dark:bg-blue-900/20 dark:text-blue-400">
+                        <MessageSquare className="h-3 w-3" />
+                        DM
+                      </span>
+                    )}
                   </div>
                   <p className="mt-1 truncate text-sm text-zinc-700 dark:text-zinc-300">
                     {truncateCaption(post.caption, 80)}
@@ -425,6 +798,13 @@ export default function PostsPage() {
 
                 {/* Actions */}
                 <div className="flex items-center gap-1">
+                  <button
+                    onClick={() => openSettings(post)}
+                    className="rounded-lg p-2 text-zinc-400 transition-colors hover:bg-zinc-100 hover:text-zinc-600 dark:hover:bg-zinc-800 dark:hover:text-zinc-300"
+                    title="설정"
+                  >
+                    <Settings2 className="h-4 w-4" />
+                  </button>
                   <button
                     onClick={() => handleToggleActive(post)}
                     className={`rounded-lg px-3 py-1.5 text-xs font-medium transition-colors ${
