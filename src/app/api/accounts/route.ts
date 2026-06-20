@@ -1,5 +1,35 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getServiceClient } from '@/lib/supabase/server'
+import { canAddAccount } from '@/lib/plan-guard'
+
+/**
+ * Extract user ID from Supabase JWT stored in the httpOnly cookie (same approach
+ * as middleware.ts and the Instagram connect/callback routes — avoids a GoTrue
+ * GET that returns 405 in some environments).
+ */
+function getUserIdFromCookie(request: NextRequest): string | null {
+  try {
+    const cookieName = request.cookies
+      .getAll()
+      .find((c) => c.name.includes('-auth-token'))?.name
+    if (!cookieName) return null
+
+    const cookieValue = request.cookies.get(cookieName)?.value
+    if (!cookieValue) return null
+
+    const parsed = JSON.parse(decodeURIComponent(cookieValue))
+    const accessToken: string | undefined = parsed.access_token
+    if (!accessToken) return null
+
+    const parts = accessToken.split('.')
+    if (parts.length !== 3) return null
+
+    const payload = JSON.parse(Buffer.from(parts[1], 'base64url').toString())
+    return payload.sub || null
+  } catch {
+    return null
+  }
+}
 
 // GET /api/accounts — list all accounts for the authenticated user
 export async function GET() {
@@ -52,7 +82,21 @@ export async function POST(request: NextRequest) {
       )
     }
 
+    const userId = getUserIdFromCookie(request)
+    if (!userId) {
+      return NextResponse.json({ error: 'Not authenticated' }, { status: 401 })
+    }
+
     const supabase = await getServiceClient()
+
+    // Enforce plan account limit before creating a new account.
+    const { allowed } = await canAddAccount(supabase, userId)
+    if (!allowed) {
+      return NextResponse.json(
+        { error: '계정 연결 한도에 도달했습니다. 요금제를 업그레이드해주세요.' },
+        { status: 403 }
+      )
+    }
 
     const { data, error } = await supabase
       .from('accounts')

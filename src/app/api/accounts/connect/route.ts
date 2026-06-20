@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { expiryFromTtl } from '@/lib/instagram'
+import { getServiceClient } from '@/lib/supabase/server'
+import { canAddAccount } from '@/lib/plan-guard'
 
 /**
  * Extract user ID from Supabase JWT stored in httpOnly cookie.
@@ -146,6 +148,26 @@ export async function POST(request: NextRequest) {
 
     if (!userId) {
       return NextResponse.json({ error: 'Not authenticated' }, { status: 401 })
+    }
+
+    // 5.5. Enforce plan account limit (a reconnect of an existing account is an
+    // update, so only enforce when this Instagram account is new to the user).
+    const guardClient = await getServiceClient()
+    const { data: existingAccount } = await guardClient
+      .from('accounts')
+      .select('id')
+      .eq('user_id', userId)
+      .eq('ig_id', String(igAccount.id))
+      .maybeSingle()
+
+    if (!existingAccount) {
+      const { allowed } = await canAddAccount(guardClient, userId)
+      if (!allowed) {
+        return NextResponse.json(
+          { error: '계정 연결 한도에 도달했습니다. 요금제를 업그레이드해주세요.' },
+          { status: 403 }
+        )
+      }
     }
 
     // 6. Save to database via direct REST API (no Supabase client, no GoTrue)

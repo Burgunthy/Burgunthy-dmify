@@ -13,6 +13,7 @@ import {
   Image,
   MessagesSquare,
   Gift,
+  CreditCard,
 } from "lucide-react"
 import { useState } from "react"
 import { createClient } from "@/lib/supabase/client"
@@ -20,6 +21,7 @@ import { createClient } from "@/lib/supabase/client"
 const navItems = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { href: "/dashboard/history", label: "History", icon: MessagesSquare },
+  { href: "/dashboard/pricing", label: "Pricing", icon: CreditCard },
   { href: "/dashboard/posts", label: "Posts", icon: Image },
   { href: "/dashboard/accounts", label: "Accounts", icon: Users },
   { href: "/dashboard/raffle", label: "Raffle", icon: Gift },

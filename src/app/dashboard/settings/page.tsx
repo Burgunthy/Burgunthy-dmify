@@ -1,8 +1,15 @@
 "use client"
 
 import { useEffect, useState } from "react"
+import Link from "next/link"
 import { createClient } from "@/lib/supabase/client"
-import { Save, RotateCcw, MessageSquare, Sparkles } from "lucide-react"
+import { Save, RotateCcw, MessageSquare, Sparkles, CreditCard, ArrowRight } from "lucide-react"
+
+const PLAN_LABELS: Record<string, string> = {
+  free: "프리",
+  pro: "프로",
+  business: "비즈니스",
+}
 
 interface MessageConfig {
   id?: string
@@ -33,6 +40,7 @@ export default function SettingsPage() {
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
   const [loading, setLoading] = useState(true)
+  const [plan, setPlan] = useState<string>("free")
 
   useEffect(() => {
     async function loadConfig() {
@@ -51,6 +59,19 @@ export default function SettingsPage() {
             welcome_message: data.welcome_message ?? defaultConfig.welcome_message,
             auto_reply_enabled: data.auto_reply_enabled ?? true,
           })
+        }
+
+        // Load the user's current plan for the subscription-management card.
+        const {
+          data: { user },
+        } = await supabase.auth.getUser()
+        if (user) {
+          const { data: planRow } = await supabase
+            .from("users")
+            .select("plan")
+            .eq("id", user.id)
+            .maybeSingle()
+          setPlan(planRow?.plan ?? "free")
         }
       } catch {
         // use defaults
@@ -111,6 +132,48 @@ export default function SettingsPage() {
 
   return (
     <div className="mx-auto max-w-3xl space-y-6">
+      {/* Subscription management */}
+      <div className="rounded-xl border border-zinc-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-900">
+        <div className="mb-4 flex items-center gap-2">
+          <CreditCard className="h-5 w-5 text-primary" />
+          <h3 className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">
+            구독 관리
+          </h3>
+        </div>
+
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <p className="text-xs text-zinc-500 dark:text-zinc-400">현재 요금제</p>
+            <p className="text-lg font-bold text-zinc-900 dark:text-zinc-100">
+              {PLAN_LABELS[plan] ?? plan}
+            </p>
+          </div>
+
+          {plan === "free" ? (
+            <Link
+              href="/dashboard/pricing"
+              className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-primary-hover"
+            >
+              요금제 보기
+              <ArrowRight className="h-4 w-4" />
+            </Link>
+          ) : (
+            <a
+              href="/portal"
+              className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-primary-hover"
+            >
+              구독 관리 포털 열기
+            </a>
+          )}
+        </div>
+
+        {plan === "free" && (
+          <p className="mt-3 text-xs text-zinc-500 dark:text-zinc-400">
+            현재 무료 요금제 사용 중입니다. 요금제를 업그레이드하면 더 많은 계정과 DM을 사용할 수 있어요.
+          </p>
+        )}
+      </div>
+
       {/* Auto-reply toggle */}
       <div className="rounded-xl border border-zinc-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-900">
         <div className="flex items-center justify-between">

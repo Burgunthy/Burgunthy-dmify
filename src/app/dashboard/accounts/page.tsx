@@ -61,6 +61,7 @@ const ERROR_MESSAGES: Record<string, string> = {
   no_ig_account:
     "No Instagram Business account found. Your Instagram must be a Business or Creator account linked to a Facebook Page.",
   db_error: "Database error. Please contact support.",
+  account_limit: "계정 연결 한도에 도달했습니다. 요금제를 업그레이드해주세요.",
   unknown: "An unexpected error occurred. Please try again.",
 }
 

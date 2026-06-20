@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
 import { expiryFromTtl } from "@/lib/instagram"
+import { getServiceClient } from "@/lib/supabase/server"
+import { canAddAccount } from "@/lib/plan-guard"
 
 function getEnv(key: string): string {
   const val = process.env[key]
@@ -186,6 +188,29 @@ export async function GET(request: NextRequest) {
     if (!userId) {
       console.error("[ig callback] No user ID in Supabase auth cookie")
       return NextResponse.redirect(new URL("/auth/login", request.url))
+    }
+
+    // --- Step 4.5: Enforce plan account limit ---
+    // A reconnect of an already-linked account is an update, not a new connection,
+    // so only enforce the limit when this Instagram account is new to the user.
+    const guardClient = await getServiceClient()
+    const { data: existingAccount } = await guardClient
+      .from("accounts")
+      .select("id")
+      .eq("user_id", userId)
+      .eq("ig_id", String(igUserId))
+      .maybeSingle()
+
+    if (!existingAccount) {
+      const { allowed, count, limit: accountLimit } = await canAddAccount(guardClient, userId)
+      if (!allowed) {
+        console.warn(
+          `[ig callback] Account limit reached for user ${userId}: ${count}/${accountLimit}`
+        )
+        return NextResponse.redirect(
+          new URL("/dashboard/accounts?error=account_limit", request.url)
+        )
+      }
     }
 
     // --- Step 5: Save to database via direct REST API (no Supabase client, no GoTrue) ---
