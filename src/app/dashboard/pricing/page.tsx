@@ -29,7 +29,7 @@ const PLANS: Plan[] = [
     id: "free",
     name: "Free",
     price: "₩0",
-    period: "/월",
+    period: "",
     accounts: "1계정",
     dms: "100 DM/월",
     features: [
@@ -41,23 +41,22 @@ const PLANS: Plan[] = [
   {
     id: "pro",
     name: "Pro",
-    price: "₩19,900",
+    price: "₩4,900",
     period: "/월",
     accounts: "3계정",
-    dms: "1,000 DM/월",
+    dms: "500 DM/월",
     recommended: true,
     productId: process.env.NEXT_PUBLIC_POLAR_PRO_PRODUCT_ID,
     features: [
       { label: "공개 댓글 답장", included: true },
       { label: "키워드 DM 자동 발송", included: true },
       { label: "랜덤 추첨 (래플)", included: true },
-      { label: "상세 분석", included: true },
     ],
   },
   {
     id: "business",
     name: "Business",
-    price: "₩49,900",
+    price: "₩14,900",
     period: "/월",
     accounts: "무제한 계정",
     dms: "무제한 DM",
@@ -66,7 +65,6 @@ const PLANS: Plan[] = [
       { label: "공개 댓글 답장", included: true },
       { label: "키워드 DM 자동 발송", included: true },
       { label: "랜덤 추첨 (래플)", included: true },
-      { label: "상세 분석", included: true },
     ],
   },
 ];
