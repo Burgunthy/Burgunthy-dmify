@@ -1,12 +1,12 @@
-# DMify 결제 시스템 구축 — Implementation Plan
+# DMify 결제 시스템 구축 — Polar Edition
 
 > **For Hermes:** Use subagent-driven-development skill to implement this plan task-by-task.
 
-**Goal:** DMify에 구독 기반 결제 시스템을 구축하여, 무료/프로/비즈니스 3티어 요금제를 운영할 수 있게 한다.
+**Goal:** DMify에 Polar 기반 구독 결제 시스템을 구축하여, 무료/프로/비즈니스 3티어 요금제를 운영할 수 있게 한다.
 
-**Architecture:** Stripe Checkout (Subscription) → Stripe Webhook → Supabase subscriptions 테이블 동기화 → middleware/layout에서 plan 기반 기능 제한. 프론트엔드는 요금제 비교 페이지 + 대시보드 사용량 UI + Customer Portal 연동.
+**Architecture:** Polar Products (recurring) → Polar Checkout → Polar Webhook → Supabase subscriptions 테이블 동기화 → middleware에서 plan 기반 기능 제한. Polar Customer Portal로 구독 관리/해지. `@polar-sh/nextjs` 공식 SDK 사용.
 
-**Tech Stack:** Next.js 15 App Router, Supabase (PostgreSQL + RLS), Stripe (Checkout Sessions + Webhooks + Customer Portal), TypeScript strict.
+**Tech Stack:** Next.js 15 App Router, Supabase (PostgreSQL + RLS), Polar (Checkout + Webhooks + Customer Portal), `@polar-sh/nextjs`, TypeScript strict.
 
 ---
 
@@ -14,12 +14,12 @@
 
 | 항목 | 값 |
 |------|-----|
-| 결제 서비스 | **Stripe** (구독 관리 표준, Webhook 안정성) |
-| 대상 시장 | 한국 (KRW 결제) + 글로벌 (USD 결제) |
+| 결제 서비스 | **Polar** (MoR, 세금 자동 처리) |
+| 한국 정산 | ✅ 지원 (Stripe Connect Express로 정산) |
+| 수수료 | 5% + 50¢ (Starter 무료 플랜) |
 | 기존 users.plan | `free` / `pro` / `business` (이미 존재) |
-| Stripe 계정 | **Taehyeon이 생성 필요** (Business 계정) |
+| Polar 서버 | 처음에 `sandbox`, 라이브 시 `production` |
 | 배포 | Vercel 자동배포 (git push) |
-| DB 마이그레이션 | Supabase SQL Editor 또은 migration 파일 |
 
 ---
 
@@ -34,30 +34,27 @@
 | 키워드별 자동 DM | ❌ | ✅ | ✅ |
 | 랜덤 추첨 (Raffle) | ❌ | ✅ | ✅ |
 | 우선 지원 | ❌ | ❌ | ✅ |
-| 분석 리포트 | 기본 | 기본 | 상세 |
-| DM 링크 클릭 추적 | 기본 | 상세 | 상세 |
 
 ---
 
-## Phase 1: 인프라 — DB 스키마 + Stripe 설정
+## Phase 1: 인프라 — DB 스키마 + Polar 설정
 
 ### Task 1.1: `subscriptions` 테이블 생성
 
-**Objective:** Stripe 구독 상태를 저장할 테이블 생성
+**Objective:** Polar 구독 상태를 저장할 테이블 생성
 
 **Files:**
 - Create: `supabase/migrations/20260620_subscriptions.sql`
-- 참고: `supabase/schema.sql:7-18` (users 테이블)
 
 **SQL:**
 ```sql
--- subscriptions: Stripe 결제 구독 기록
+-- subscriptions: Polar 결제 구독 기록
 CREATE TABLE IF NOT EXISTS subscriptions (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    stripe_customer_id TEXT NOT NULL,
-    stripe_subscription_id TEXT NOT NULL UNIQUE,
-    stripe_price_id TEXT NOT NULL,
+    polar_customer_id TEXT NOT NULL,
+    polar_subscription_id TEXT NOT NULL UNIQUE,
+    polar_product_id TEXT NOT NULL,
     status TEXT NOT NULL CHECK (status IN (
         'active', 'trialing', 'past_due', 'canceled', 'unpaid', 'incomplete', 'incomplete_expired'
     )),
@@ -66,11 +63,11 @@ CREATE TABLE IF NOT EXISTS subscriptions (
     cancel_at_period_end BOOLEAN DEFAULT FALSE,
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW(),
-    UNIQUE(user_id, stripe_subscription_id)
+    UNIQUE(user_id, polar_subscription_id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_subscriptions_user_id ON subscriptions(user_id);
-CREATE INDEX IF NOT EXISTS idx_subscriptions_stripe_customer ON subscriptions(stripe_customer_id);
+CREATE INDEX IF NOT EXISTS idx_subscriptions_polar_customer ON subscriptions(polar_customer_id);
 CREATE INDEX IF NOT EXISTS idx_subscriptions_status ON subscriptions(status);
 
 ALTER TABLE subscriptions ENABLE ROW LEVEL SECURITY;
@@ -79,14 +76,13 @@ CREATE POLICY "Users can read own subscriptions" ON subscriptions FOR SELECT USI
     user_id IN (SELECT id FROM users WHERE auth.uid() = id)
 );
 
--- updated_at trigger
 CREATE TRIGGER subscriptions_updated_at BEFORE UPDATE ON subscriptions
     FOR EACH ROW EXECUTE FUNCTION update_updated_at();
 ```
 
-**Verification:** Supabase SQL Editor에서 실행 후 `SELECT * FROM subscriptions LIMIT 1` 에러 없음.
+**Verification:** Supabase SQL Editor 실행 후 `SELECT * FROM subscriptions LIMIT 1` 에러 없음.
 
-**Commit:** `feat: add subscriptions table for Stripe billing`
+**Commit:** `feat: add subscriptions table for Polar billing`
 
 ---
 
@@ -99,12 +95,11 @@ CREATE TRIGGER subscriptions_updated_at BEFORE UPDATE ON subscriptions
 
 **SQL:**
 ```sql
--- usage: 월별 사용량 카운터
 CREATE TABLE IF NOT EXISTS usage (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     account_id UUID REFERENCES accounts(id) ON DELETE SET NULL,
-    month TEXT NOT NULL,          -- 'YYYY-MM' 형식
+    month TEXT NOT NULL,
     comments_received INTEGER DEFAULT 0,
     dms_sent INTEGER DEFAULT 0,
     created_at TIMESTAMPTZ DEFAULT NOW(),
@@ -124,88 +119,91 @@ CREATE TRIGGER usage_updated_at BEFORE UPDATE ON usage
     FOR EACH ROW EXECUTE FUNCTION update_updated_at();
 ```
 
-**Verification:** Supabase SQL Editor 실행 후 `SELECT * FROM usage LIMIT 1` 에러 없음.
-
 **Commit:** `feat: add usage tracking table`
 
 ---
 
-### Task 1.3: `stripe_products` + `stripe_prices` 참조 테이블 생성
+### Task 1.3: `plan_config` 테이블 생성
 
-**Objective:** plan → Stripe Price ID 매핑 (서버에서 하드코딩 대신 DB에서 관리)
+**Objective:** plan별 Polar Product ID 매핑 + 한도 정의
 
 **Files:**
-- Create: `supabase/migrations/20260620_stripe_config.sql`
+- Create: `supabase/migrations/20260620_plan_config.sql`
 
 **SQL:**
 ```sql
--- plan_config: plan별 Stripe price 매핑 (단행, 운영자만 편집)
 CREATE TABLE IF NOT EXISTS plan_config (
     plan TEXT PRIMARY KEY CHECK (plan IN ('free', 'pro', 'business')),
-    stripe_price_id TEXT,                -- Stripe Price ID (free는 NULL)
+    polar_product_id TEXT,                  -- Polar Product ID (free는 NULL)
     max_accounts INTEGER NOT NULL DEFAULT 1,
     max_dms_per_month INTEGER NOT NULL DEFAULT 100,
-    features JSONB NOT NULL DEFAULT '{}', -- {"keyword_dm": true, "raffle": true, ...}
-    display_price TEXT NOT NULL DEFAULT '₩0',  -- UI 표시용
+    features JSONB NOT NULL DEFAULT '{}',
+    display_price TEXT NOT NULL DEFAULT '₩0',
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- 초기 데이터 (Stripe Price ID는 Task 2.1에서 채움)
 INSERT INTO plan_config (plan, max_accounts, max_dms_per_month, features, display_price) VALUES
     ('free',     1,   100,   '{"keyword_dm": false, "raffle": false, "analytics": "basic"}',     '₩0'),
     ('pro',      3,   1000,  '{"keyword_dm": true,  "raffle": true,  "analytics": "basic"}',     '₩19,900/월'),
     ('business', -1,  -1,    '{"keyword_dm": true,  "raffle": true,  "analytics": "detailed"}',   '₩49,900/월')
 ON CONFLICT (plan) DO NOTHING;
 
--- RLS: 모든 로그인 사용자 읽기 가능 (public data)
 ALTER TABLE plan_config ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "Anyone authenticated can read plan_config" ON plan_config FOR SELECT USING (auth.uid() IS NOT NULL);
 ```
-
-**Verification:** `SELECT * FROM plan_config` → 3행 반환.
 
 **Commit:** `feat: add plan_config table with tier limits`
 
 ---
 
-### Task 1.4: Stripe 계정 생성 + API 키 발급 (Taehyeon 전용)
+### Task 1.4: `users` 테이블에 `polar_customer_id` 컬럼 추가
 
-**Objective:** Stripe Dashboard에서 Business 계정 생성 후 키 획득
+**Objective:** 사용자와 Polar Customer를 연결
+
+**Files:**
+- Create: `supabase/migrations/20260620_add_polar_customer_id.sql`
+
+**SQL:**
+```sql
+ALTER TABLE users ADD COLUMN IF NOT EXISTS polar_customer_id TEXT;
+```
+
+**Commit:** `feat: add polar_customer_id to users table`
+
+---
+
+### Task 1.5: Polar 계정 생성 + 제품 등록 (Taehyeon 전용)
+
+**Objective:** Polar에 가입하고 Pro/Business 제품을 생성
 
 **Taehyeon이 직접 수행:**
 
-1. https://dashboard.stripe.com/register 접속
-2. Business 계정 생성 (한국 사업자 정보)
-3. Products 생성:
-   - Product 1: "DMify Pro" → Monthly ₩19,900 → Price ID 복사
-   - Product 2: "DMify Business" → Monthly ₩49,900 → Price ID 복사
-4. API Keys에서:
-   - **Publishable Key** (pk_...) 복사
-   - **Secret Key** (sk_...) 복사
-5. Webhook signing secret은 Task 2.4에서 생성
+1. **Polar 가입**: https://polar.sh/signup (GitHub/Google 이메일)
+2. **Organization 생성**: DMify organization
+3. **정산 설정**: Settings → Payouts → Stripe Connect Express 연결 (한국 개인/법인)
+4. **Products 생성** (2개):
+   - **DMify Pro**: Type = Subscription, Price = ₩19,900, Recurring = Monthly
+     → Product ID 복사
+   - **DMify Business**: Type = Subscription, Price = ₩49,900, Recurring = Monthly
+     → Product ID 복사
+5. **토큰 발급**: Dashboard → Settings → Integrations → Access Token 생성
+6. **Webhook Secret**: Dashboard → Settings → Integrations → Webhook → Secret 생성
 
 **Deliverables (Taehyeon → Hermes):**
 ```
-STRIPE_PUBLISHABLE_KEY=pk_xxx
-STRIPE_SECRET_KEY=sk_xxx
-STRIPE_PRO_PRICE_ID=price_xxx
-STRIPE_BUSINESS_PRICE_ID=price_xxx
-```
-
-**Vercel 환경변수 설정 (Hermes):**
-```bash
-vercel env add STRIPE_PUBLISHABLE_KEY
-vercel env add STRIPE_SECRET_KEY
-# .env.local도 업데이트
+POLAR_ACCESS_TOKEN=plat_xxx
+POLAR_WEBHOOK_SECRET=whsec_xxx
+POLAR_PRO_PRODUCT_ID=prod_xxx
+POLAR_BUSINESS_PRODUCT_ID=prod_xxx
 ```
 
 ---
 
-## Phase 2: Stripe 결제 연동 (Backend)
+## Phase 2: Polar 연동 (Backend)
 
-### Task 2.1: Stripe SDK 설치
+### Task 2.1: `@polar-sh/nextjs` 설치
 
-**Objective:** stripe npm 패키지 추가
+**Objective:** Polar 공식 Next.js SDK 추가
 
 **Files:**
 - Modify: `package.json`
@@ -213,377 +211,210 @@ vercel env add STRIPE_SECRET_KEY
 **Step 1: Install**
 ```bash
 cd /home/jth/projects/auto-instagram/dmify
-npm install stripe @stripe/stripe-js
+npm install @polar-sh/nextjs
 ```
 
 **Step 2: Verify**
 ```bash
-npm ls stripe @stripe/stripe-js
+npm ls @polar-sh/nextjs
 ```
-Expected: `stripe@latest`, `@stripe/stripe-js@latest`
+Expected: `@polar-sh/nextjs@latest`
 
-**Commit:** `chore: add stripe and @stripe/stripe-js dependencies`
+**Commit:** `chore: add @polar-sh/nextjs dependency`
 
 ---
 
-### Task 2.2: Stripe client 초기화 유틸
+### Task 2.2: Checkout Route 생성
 
-**Objective:** 서버 전용 Stripe 인스턴스 생성
+**Objective:** `/checkout` — Polar Checkout으로 리다이렉트
 
 **Files:**
-- Create: `src/lib/stripe/server.ts`
-- Create: `src/lib/stripe/client.ts`
+- Create: `src/app/checkout/route.ts`
 
-**`src/lib/stripe/server.ts`:**
+**코드 (공식 SDK 기반):**
 ```typescript
-import Stripe from 'stripe'
+import { Checkout } from "@polar-sh/nextjs";
 
-export function getStripeServer() {
-  const secretKey = process.env.STRIPE_SECRET_KEY
-  if (!secretKey) {
-    throw new Error('STRIPE_SECRET_KEY is not set')
-  }
-  return new Stripe(secretKey, {
-    apiVersion: '2025-04-30.basil', // 최신 API 버전
-    typescript: true,
-  })
-}
+export const GET = Checkout({
+  accessToken: process.env.POLAR_ACCESS_TOKEN!,
+  successUrl: `${process.env.NEXT_PUBLIC_APP_URL}/dashboard?upgraded=true`,
+  returnUrl: `${process.env.NEXT_PUBLIC_APP_URL}/dashboard/pricing`,
+  server: process.env.POLAR_SERVER as "sandbox" | "production" || "sandbox",
+});
 ```
 
-**`src/lib/stripe/client.ts`:**
-```typescript
-import { loadStripe } from '@stripe/stripe-js'
-
-let stripePromise: ReturnType<typeof loadStripe> | null = null
-
-export function getStripeClient() {
-  if (!stripePromise) {
-    stripePromise = loadStripe(
-      process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY || ''
-    )
-  }
-  return stripePromise
-}
+**호출 방식:**
+```
+GET /checkout?products=<POLAR_PRO_PRODUCT_ID>&customerEmail=<user_email>&customerExternalId=<user_id>
 ```
 
-**Commit:** `feat: add Stripe server and client initialization`
+- `products`: Polar Product ID (Pro 또는 Business)
+- `customerEmail`: 사용자 이메일 (자동 Customer 생성)
+- `customerExternalId`: Supabase user ID (Customer 매핑용)
+
+**Commit:** `feat: add Polar checkout route`
 
 ---
 
-### Task 2.3: Checkout Session 생성 API
+### Task 2.3: Webhook Route 생성
 
-**Objective:** `/api/stripe/checkout` — 선택한 plan에 대한 Stripe Checkout Session 생성
-
-**Files:**
-- Create: `src/app/api/stripe/checkout/route.ts`
-
-**Step 1: Plan → Price ID 매핑**
-```typescript
-import { NextRequest, NextResponse } from 'next/server'
-import { getStripeServer } from '@/lib/stripe/server'
-import { createClient } from '@/lib/supabase/server'
-
-// plan → Stripe Price ID
-const PLAN_PRICE_IDS: Record<string, string> = {
-  pro: process.env.STRIPE_PRO_PRICE_ID || '',
-  business: process.env.STRIPE_BUSINESS_PRICE_ID || '',
-}
-
-const PLAN_TO_STRIPE_PLAN: Record<string, string> = {
-  pro: 'pro',
-  business: 'business',
-}
-
-export async function POST(request: NextRequest) {
-  const { plan } = await request.json() as { plan: string }
-
-  if (!plan || !PLAN_PRICE_IDS[plan]) {
-    return NextResponse.json(
-      { error: `Invalid plan: ${plan}. Use 'pro' or 'business'.` },
-      { status: 400 }
-    )
-  }
-
-  // 1. Get current user
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
-
-  const stripe = getStripeServer()
-
-  // 2. Get or create Stripe customer
-  const { data: userData } = await supabase
-    .from('users')
-    .select('stripe_customer_id')
-    .eq('id', user.id)
-    .single()
-
-  let customerId = userData?.stripe_customer_id
-
-  if (!customerId) {
-    const customer = await stripe.customers.create({
-      email: user.email || undefined,
-      metadata: { supabase_user_id: user.id },
-    })
-    customerId = customer.id
-
-    await supabase
-      .from('users')
-      .update({ stripe_customer_id: customerId })
-      .eq('id', user.id)
-  }
-
-  // 3. Create Checkout Session
-  const origin = process.env.NEXT_PUBLIC_APP_URL || 'https://commentlink-xi.vercel.app'
-
-  const session = await stripe.checkout.sessions.create({
-    customer: customerId,
-    mode: 'subscription',
-    line_items: [
-      { price: PLAN_PRICE_IDS[plan], quantity: 1 },
-    ],
-    success_url: `${origin}/dashboard?upgraded=true&plan=${plan}`,
-    cancel_url: `${origin}/dashboard/pricing?canceled=true`,
-    metadata: {
-      supabase_user_id: user.id,
-      plan: PLAN_TO_STRIPE_PLAN[plan],
-    },
-    subscription_data: {
-      metadata: {
-        supabase_user_id: user.id,
-        plan: PLAN_TO_STRIPE_PLAN[plan],
-      },
-    },
-  })
-
-  return NextResponse.json({ url: session.url, sessionId: session.id })
-}
-```
-
-**Verification:** (Stripe 키 설정 후) `curl -X POST /api/stripe/checkout -d '{"plan":"pro"}'` → `{ "url": "https://checkout.stripe.com/..." }`
-
-**Commit:** `feat: add Stripe checkout session API`
-
----
-
-### Task 2.4: Stripe Webhook 엔드포인트
-
-**Objective:** `/api/stripe/webhook` — Stripe 이벤트 수신 → DB 동기화
+**Objective:** `/api/webhook/polar` — Polar 이벤트 수신 → DB 동기화
 
 **Files:**
-- Create: `src/app/api/stripe/webhook/route.ts`
+- Create: `src/app/api/webhook/polar/route.ts`
 
-**이벤트 처리 목록:**
-| Stripe 이벤트 | 동작 |
+**이벤트 처리:**
+| Polar 이벤트 | 동작 |
 |---------------|------|
-| `checkout.session.completed` | subscriptions 테이블 insert + users.plan 업데이트 |
-| `customer.subscription.updated` | 구독 상태/기간 업데이트 |
-| `customer.subscription.deleted` | users.plan = 'free' + 구독 비활성화 |
-| `invoice.payment_failed` | 구독 상태 = 'past_due' |
+| `subscription_created` | subscriptions 테이블 insert + users.plan 업데이트 |
+| `subscription_active` | 구독 활성화 처리 |
+| `subscription_updated` | 상태/기간 업데이트 |
+| `subscription_canceled` | users.plan = 'free' |
+| `subscription_revoked` | users.plan = 'free' (즉시 해지) |
+| `order_paid` | 사용량 리셋 (새 결제 주기) |
 
+**코드:**
 ```typescript
-import { NextRequest, NextResponse } from 'next/server'
-import { getStripeServer } from '@/lib/stripe/server'
-import { createClient } from '@/lib/supabase/server'
-import Stripe from 'stripe'
-import * as crypto from 'crypto'
+import { Webhooks } from "@polar-sh/nextjs";
+import { createClient } from "@/lib/supabase/server";
 
-const WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET || ''
+export const POST = Webhooks({
+  webhookSecret: process.env.POLAR_WEBHOOK_SECRET!,
 
-function verifySignature(payload: string, signature: string): boolean {
-  if (!WEBHOOK_SECRET) return true // dev mode
-  const expected = crypto
-    .createHmac('sha256', WEBHOOK_SECRET)
-    .update(payload)
-    .digest('hex')
-  return crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected))
-}
+  onSubscriptionCreated: async (payload) => {
+    const sub = payload.data;
+    const externalId = sub.customer?.externalId;
+    if (!externalId) return;
 
-function getStripeEvent(payload: string, signature: string): Stripe.Event {
-  const stripe = getStripeServer()
-  return stripe.webhooks.constructEvent(payload, signature, WEBHOOK_SECRET)
-}
+    const supabase = await createClient();
+    const plan = resolvePlan(sub.productId);
 
-// Plan mapping: Stripe price_id → DMify plan
-const PRICE_TO_PLAN: Record<string, string> = {
-  [process.env.STRIPE_PRO_PRICE_ID || '']: 'pro',
-  [process.env.STRIPE_BUSINESS_PRICE_ID || '']: 'business',
-}
+    // Upsert subscription
+    await supabase.from("subscriptions").upsert({
+      user_id: externalId,
+      polar_customer_id: sub.customerId,
+      polar_subscription_id: sub.id,
+      polar_product_id: sub.productId,
+      status: sub.status,
+      current_period_start: sub.currentPeriodStart,
+      current_period_end: sub.currentPeriodEnd,
+    }, { onConflict: "user_id,polar_subscription_id" });
 
-export async function POST(request: NextRequest) {
-  const signature = request.headers.get('stripe-signature') || ''
-  const payload = await request.text()
+    // Update user plan
+    await supabase.from("users").update({ plan, polar_customer_id: sub.customerId }).eq("id", externalId);
 
-  let event: Stripe.Event
-  try {
-    event = getStripeEvent(payload, signature)
-  } catch (err) {
-    console.error('[stripe:webhook] verification failed:', err)
-    return NextResponse.json({ error: 'Invalid signature' }, { status: 401 })
-  }
+    console.log(`[polar:webhook] subscription created: ${plan} for user ${externalId}`);
+  },
 
-  const supabase = await createClient()
+  onSubscriptionUpdated: async (payload) => {
+    const sub = payload.data;
+    const supabase = await createClient();
 
-  switch (event.type) {
-    case 'checkout.session.completed': {
-      const session = event.data.object as Stripe.Checkout.Session
-      const userId = session.metadata?.supabase_user_id
-      const plan = session.metadata?.plan
-      const subscriptionId = session.subscription as string
-      const customerId = session.customer as string
+    await supabase.from("subscriptions").update({
+      status: sub.status,
+      current_period_start: sub.currentPeriodStart,
+      current_period_end: sub.currentPeriodEnd,
+      cancel_at_period_end: sub.cancelAtPeriodEnd,
+    }).eq("polar_subscription_id", sub.id);
 
-      if (!userId || !plan || !subscriptionId) break
+    console.log(`[polar:webhook] subscription updated: ${sub.id} → ${sub.status}`);
+  },
 
-      // Fetch subscription details from Stripe
-      const stripe = getStripeServer()
-      const subscription = await stripe.subscriptions.retrieve(subscriptionId)
+  onSubscriptionCanceled: async (payload) => {
+    const sub = payload.data;
+    const externalId = sub.customer?.externalId;
+    if (!externalId) return;
 
-      // Insert subscription record
-      await supabase.from('subscriptions').upsert({
-        user_id: userId,
-        stripe_customer_id: customerId,
-        stripe_subscription_id: subscriptionId,
-        stripe_price_id: subscription.items.data[0]?.price?.id || '',
-        status: 'active',
-        current_period_start: new Date(subscription.current_period_start * 1000).toISOString(),
-        current_period_end: new Date(subscription.current_period_end * 1000).toISOString(),
-      }, { onConflict: 'user_id,stripe_subscription_id' })
+    const supabase = await createClient();
 
-      // Update user plan
-      await supabase.from('users').update({ plan }).eq('id', userId)
+    await supabase.from("subscriptions").update({ status: "canceled" }).eq("polar_subscription_id", sub.id);
+    await supabase.from("users").update({ plan: "free" }).eq("id", externalId);
 
-      console.log(`[stripe:webhook] activated ${plan} for user ${userId}`)
-      break
-    }
+    console.log(`[polar:webhook] subscription canceled for user ${externalId}`);
+  },
 
-    case 'customer.subscription.updated': {
-      const subscription = event.data.object as Stripe.Subscription
-      const userId = subscription.metadata?.supabase_user_id
-      if (!userId) break
+  onSubscriptionRevoked: async (payload) => {
+    const sub = payload.data;
+    const externalId = sub.customer?.externalId;
+    if (!externalId) return;
 
-      await supabase.from('subscriptions').update({
-        status: subscription.status,
-        current_period_start: new Date(subscription.current_period_start * 1000).toISOString(),
-        current_period_end: new Date(subscription.current_period_end * 1000).toISOString(),
-        cancel_at_period_end: subscription.cancel_at_period_end,
-      }).eq('stripe_subscription_id', subscription.id)
+    const supabase = await createClient();
 
-      console.log(`[stripe:webhook] updated subscription ${subscription.id} → ${subscription.status}`)
-      break
-    }
+    await supabase.from("subscriptions").update({ status: "canceled" }).eq("polar_subscription_id", sub.id);
+    await supabase.from("users").update({ plan: "free" }).eq("id", externalId);
 
-    case 'customer.subscription.deleted': {
-      const subscription = event.data.object as Stripe.Subscription
-      const userId = subscription.metadata?.supabase_user_id
-      if (!userId) break
+    console.log(`[polar:webhook] subscription revoked for user ${externalId}`);
+  },
+});
 
-      await supabase.from('subscriptions').update({
-        status: 'canceled',
-      }).eq('stripe_subscription_id', subscription.id)
+// Polar Product ID → DMify plan mapping
+const PRODUCT_PLAN_MAP: Record<string, string> = {
+  [process.env.POLAR_PRO_PRODUCT_ID || ""]: "pro",
+  [process.env.POLAR_BUSINESS_PRODUCT_ID || ""]: "business",
+};
 
-      await supabase.from('users').update({ plan: 'free' }).eq('id', userId)
-
-      console.log(`[stripe:webhook] canceled subscription for user ${userId}`)
-      break
-    }
-
-    case 'invoice.payment_failed': {
-      const invoice = event.data.object as Stripe.Invoice
-      const subscriptionId = invoice.subscription as string
-      if (!subscriptionId) break
-
-      await supabase.from('subscriptions').update({
-        status: 'past_due',
-      }).eq('stripe_subscription_id', subscriptionId)
-
-      console.log(`[stripe:webhook] payment failed for subscription ${subscriptionId}`)
-      break
-    }
-
-    default:
-      console.log(`[stripe:webhook] unhandled event: ${event.type}`)
-  }
-
-  return NextResponse.json({ received: true })
+function resolvePlan(productId: string): string {
+  return PRODUCT_PLAN_MAP[productId] || "free";
 }
 ```
 
-**Verification:** Stripe CLI로 테스트: `stripe listen --forward-to localhost:3000/api/stripe/webhook`
+**Verification:** `curl` 또는 Polar CLI로 test webhook 전송 후 DB 확인.
 
-**Commit:** `feat: add Stripe webhook endpoint for subscription lifecycle`
+**Commit:** `feat: add Polar webhook endpoint for subscription lifecycle`
 
 ---
 
-### Task 2.5: Customer Portal API
+### Task 2.4: Customer Portal Route 생성
 
-**Objective:** `/api/stripe/portal` — 구독 관리/해지를 위한 Stripe Customer Portal 세션 생성
+**Objective:** `/portal` — 구독 관리/해지를 위한 Polar Customer Portal로 리다이렉트
 
 **Files:**
-- Create: `src/app/api/stripe/portal/route.ts`
+- Create: `src/app/portal/route.ts`
 
+**코드 (공식 SDK 기반):**
 ```typescript
-import { NextRequest, NextResponse } from 'next/server'
-import { getStripeServer } from '@/lib/stripe/server'
-import { createClient } from '@/lib/supabase/server'
+import { CustomerPortal } from "@polar-sh/nextjs";
+import { NextRequest } from "next/server";
+import { createClient } from "@/lib/supabase/server";
 
-export async function POST(request: NextRequest) {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
+export const GET = CustomerPortal({
+  accessToken: process.env.POLAR_ACCESS_TOKEN!,
+  server: process.env.POLAR_SERVER as "sandbox" | "production" || "sandbox",
+  returnUrl: `${process.env.NEXT_PUBLIC_APP_URL}/dashboard/settings`,
+  getCustomerId: async (req: NextRequest) => {
+    // Supabase에서 현재 사용자의 polar_customer_id 조회
+    const supabase = await createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) throw new Error("Unauthorized");
 
-  const { data: userData } = await supabase
-    .from('users')
-    .select('stripe_customer_id')
-    .eq('id', user.id)
-    .single()
+    const { data } = await supabase
+      .from("users")
+      .select("polar_customer_id")
+      .eq("id", user.id)
+      .single();
 
-  if (!userData?.stripe_customer_id) {
-    return NextResponse.json({ error: 'No Stripe customer found' }, { status: 404 })
-  }
-
-  const stripe = getStripeServer()
-  const origin = process.env.NEXT_PUBLIC_APP_URL || 'https://commentlink-xi.vercel.app'
-
-  const session = await stripe.billingPortal.sessions.create({
-    customer: userData.stripe_customer_id,
-    return_url: `${origin}/dashboard/settings`,
-  })
-
-  return NextResponse.json({ url: session.url })
-}
+    if (!data?.polar_customer_id) {
+      throw new Error("No Polar customer found");
+    }
+    return data.polar_customer_id;
+  },
+});
 ```
 
-**Verification:** `curl -X POST /api/stripe/portal` → `{ "url": "https://billing.stripe.com/..." }`
-
-**Commit:** `feat: add Stripe customer portal API`
+**Commit:** `feat: add Polar customer portal route`
 
 ---
 
-### Task 2.6: Webhook에서 사용량 카운트
+### Task 2.5: Webhook에서 사용량 카운트 + plan 제한
 
-**Objective:** DM 발송 시 usage 테이블 업데이트
+**Objective:** DM 발송 시 usage 업데이트 + 한도 체크
 
 **Files:**
-- Modify: `src/app/api/webhook/route.ts:312-335` (DM 전송 성공 후)
+- Create: `src/lib/plan-guard.ts`
+- Create: `supabase/migrations/20260620_increment_usage_rpc.sql`
+- Modify: `src/app/api/webhook/route.ts` (DM 전송 전후)
 
-**webhook route.ts에 추가 (DM 전송 성공 직후):**
-```typescript
-// After successful DM send (inside the try block around igApi 'me/messages'):
-// Increment monthly DM counter
-const month = new Date().toISOString().slice(0, 7) // 'YYYY-MM'
-const { error: usageErr } = await supabase.rpc('increment_usage', {
-  p_user_id: /* user_id from account join */,
-  p_account_id: account.id,
-  p_month: month,
-  p_field: 'dms_sent',
-})
-```
-
-**추가 필요 — RPC 함수 (migration):**
+**RPC 함수:**
 ```sql
 CREATE OR REPLACE FUNCTION increment_usage(
   p_user_id UUID,
@@ -604,96 +435,83 @@ END;
 $$ LANGUAGE plpgsql;
 ```
 
-**Commit:** `feat: add DM usage tracking in webhook`
-
----
-
-### Task 2.7: Webhook에서 plan 제한 체크
-
-**Objective:** DM 발송 전에 plan 한도 확인 → 초과 시 차단 + 에러 메시지
-
-**Files:**
-- Create: `src/lib/plan-guard.ts`
-- Modify: `src/app/api/webhook/route.ts`
-
 **`src/lib/plan-guard.ts`:**
 ```typescript
-import type { SupabaseClient } from '@supabase/supabase-js'
-
-interface PlanLimits {
-  plan: string
-  max_accounts: number
-  max_dms_per_month: number
-}
+import type { SupabaseClient } from "@supabase/supabase-js";
 
 export async function canSendDm(
   supabase: SupabaseClient,
   userId: string
 ): Promise<{ allowed: boolean; reason?: string; used: number; limit: number }> {
-  // 1. Get user plan
   const { data: user } = await supabase
-    .from('users')
-    .select('plan')
-    .eq('id', userId)
-    .single()
+    .from("users")
+    .select("plan")
+    .eq("id", userId)
+    .single();
 
-  const plan = user?.plan || 'free'
+  const plan = user?.plan || "free";
 
-  // 2. Get plan limits
   const { data: config } = await supabase
-    .from('plan_config')
-    .select('max_dms_per_month')
-    .eq('plan', plan)
-    .single()
+    .from("plan_config")
+    .select("max_dms_per_month")
+    .eq("plan", plan)
+    .single();
 
-  const limit = config?.max_dms_per_month ?? 100
+  const limit = config?.max_dms_per_month ?? 100;
+  if (limit === -1) return { allowed: true, used: 0, limit: -1 };
 
-  // -1 = unlimited
-  if (limit === -1) {
-    return { allowed: true, used: 0, limit: -1 }
-  }
-
-  // 3. Get current month usage
-  const month = new Date().toISOString().slice(0, 7)
+  const month = new Date().toISOString().slice(0, 7);
   const { data: usageRow } = await supabase
-    .from('usage')
-    .select('dms_sent')
-    .eq('user_id', userId)
-    .eq('month', month)
-    .single()
+    .from("usage")
+    .select("dms_sent")
+    .eq("user_id", userId)
+    .eq("month", month)
+    .single();
 
-  const used = usageRow?.dms_sent ?? 0
-
+  const used = usageRow?.dms_sent ?? 0;
   if (used >= limit) {
     return {
       allowed: false,
       reason: `Monthly DM limit reached (${used}/${limit}). Upgrade your plan.`,
-      used,
-      limit,
-    }
+      used, limit,
+    };
   }
-
-  return { allowed: true, used, limit }
+  return { allowed: true, used, limit };
 }
 ```
 
-**webhook route.ts에 guard 추가:**
+**webhook route.ts에 guard 추가 (DM 전송 전):**
 ```typescript
-import { canSendDm } from '@/lib/plan-guard'
+import { canSendDm } from "@/lib/plan-guard";
 
-// In handleComment(), before DM sending block:
-const accountId = account.user_id // need to join users table
-const dmCheck = await canSendDm(supabase, accountId)
+// handleComment() 내, DM 전송 블록 전:
+const accountOwner = await supabase
+  .from("users")
+  .select("id")
+  .eq("id", /* userId from accounts join */)
+  .single();
+
+const dmCheck = await canSendDm(supabase, accountOwner.data?.id);
 if (!dmCheck.allowed) {
-  console.log(`[webhook] DM blocked: ${dmCheck.reason}`)
-  await supabase.from('conversations')
-    .update({ status: 'failed', error_message: dmCheck.reason })
-    .eq('comment_id', commentId)
-  return
+  console.log(`[webhook] DM blocked: ${dmCheck.reason}`);
+  await markFailed(supabase, commentId, dmCheck.reason || "Plan limit reached");
+  return;
 }
 ```
 
-**Commit:** `feat: add plan-based DM limit enforcement`
+**webhook route.ts에 usage 증가 (DM 전송 성공 후):**
+```typescript
+// DM 전송 성공 직후:
+const month = new Date().toISOString().slice(0, 7);
+await supabase.rpc("increment_usage", {
+  p_user_id: userId,
+  p_account_id: account.id,
+  p_month: month,
+  p_field: "dms_sent",
+});
+```
+
+**Commit:** `feat: add plan-based DM limit enforcement and usage tracking`
 
 ---
 
@@ -701,7 +519,7 @@ if (!dmCheck.allowed) {
 
 ### Task 3.1: 요금제 비교 페이지
 
-**Objective:** `/dashboard/pricing` — 3개 티어 카드 비교 + 결제 버튼
+**Objective:** `/dashboard/pricing` — 3개 티어 카드 비교 + Polar Checkout 링크
 
 **Files:**
 - Create: `src/app/dashboard/pricing/page.tsx`
@@ -719,28 +537,34 @@ if (!dmCheck.allowed) {
 │  │  1 계정  │  │  3 계정  │  │  무제한  │      │
 │  │  100 DM  │  │  1,000DM │  │  무제한  │      │
 │  │          │  │          │  │          │      │
-│  │ 현재 요금│  │ [결제하기]│  │ [결제하기]│      │
+│  │ 현재 요금│  │[결제하기]│  │[결제하기]│      │
 │  └──────────┘  └──────────┘  └──────────┘      │
 └─────────────────────────────────────────────────┘
 ```
 
-**Commit:** `feat: add pricing page with tier comparison`
+**결제 버튼 클릭 시:**
+```typescript
+// Polar Checkout으로 리다이렉트
+const checkoutUrl = `/checkout?products=${productId}&customerEmail=${user.email}&customerExternalId=${user.id}`;
+router.push(checkoutUrl);
+```
+
+**Commit:** `feat: add pricing page with Polar checkout integration`
 
 ---
 
 ### Task 3.2: 대시보드 사용량 표시
 
-**Objective:** Dashboard 상단에 현재 plan + 월간 사용량 바 표시
+**Objective:** Dashboard 상단에 현재 plan + 월간 DM 사용량 바
 
 **Files:**
-- Modify: `src/app/dashboard/page.tsx` (statCards에 usage card 추가)
+- Modify: `src/app/dashboard/page.tsx`
 
 **UI:**
 ```
 ┌────────────────────────────────────────┐
 │  📊 Plan: Pro  │  DM 사용량           │
 │                 │  ████████░░░ 430/1000│
-│                 │  남은 일수: 12일      │
 └────────────────────────────────────────┘
 ```
 
@@ -753,15 +577,7 @@ if (!dmCheck.allowed) {
 **Objective:** 무료 사용자 대시보드 상단에 업그레이드 유도 배너
 
 **Files:**
-- Modify: `src/app/dashboard/page.tsx` (plan이 free일 때 배너 표시)
-
-**UI:**
-```
-┌──────────────────────────────────────────────┐
-│  🚀 DM 한도에 도달하면 자동차단됩니다.        │
-│  Pro로 업그레이드하여 한도를 늘리세요!  [Pro로 업그레이드 →]  │
-└──────────────────────────────────────────────┘
-```
+- Modify: `src/app/dashboard/page.tsx`
 
 **Commit:** `feat: add upgrade banner for free users`
 
@@ -769,7 +585,7 @@ if (!dmCheck.allowed) {
 
 ### Task 3.4: Settings에 구독 관리 버튼
 
-**Objective:** Settings 페이지에 "구독 관리" 버튼 → Stripe Customer Portal로 이동
+**Objective:** Settings 페이지에 "구독 관리" 버튼 → `/portal` (Polar Customer Portal)
 
 **Files:**
 - Modify: `src/app/dashboard/settings/page.tsx`
@@ -785,95 +601,47 @@ if (!dmCheck.allowed) {
 **Files:**
 - Modify: `src/app/api/accounts/connect/route.ts`
 
-**로직:**
-```typescript
-// Before creating account:
-const { data: user } = await supabase.from('users').select('plan').eq('id', userId).single()
-const { data: config } = await supabase.from('plan_config').select('max_accounts').eq('plan', user?.plan).single()
-const { count } = await supabase.from('accounts').select('*', { count: 'exact', head: true }).eq('user_id', userId)
-
-if (config && config.max_accounts !== -1 && (count ?? 0) >= config.max_accounts) {
-  return NextResponse.json(
-    { error: `무료 플랜은 ${config.max_accounts}개까지만 연결 가능합니다. Pro로 업그레이드하세요.` },
-    { status: 403 }
-  )
-}
-```
-
 **Commit:** `feat: enforce account limit based on plan`
 
 ---
 
-## Phase 4: Vercel 배포 + 환경변수
+## Phase 4: 배포 + 환경설정
 
 ### Task 4.1: Vercel 환경변수 설정
 
-**Objective:** Stripe 키 + Webhook secret을 Vercel에 설정
-
-**Files:** 없음 (API/CLI 작업)
-
-**명령어:**
+**명령어 (Taehyeon이 토큰 주면 실행):**
 ```bash
 cd /home/jth/projects/auto-instagram/dmify
 
-# Stripe keys (Taehyeon이 주면 실행)
-echo "STRIPE_SECRET_KEY" | vercel env add STRIPE_SECRET_KEY production
-echo "STRIPE_WEBHOOK_SECRET" | vercel env add STRIPE_WEBHOOK_SECRET production
-echo "NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY" | vercel env add NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY production
+vercel env add POLAR_ACCESS_TOKEN production
+vercel env add POLAR_WEBHOOK_SECRET production
 
-# Preview/Development에도 동일하게
-# vercel env add ... preview
-# vercel env add ... development
+# .env.local도 업데이트
 ```
 
-**Verification:** `vercel env ls` → Stripe 관련 변수 3개 표시
-
 ---
 
-### Task 4.2: Stripe Webhook 엔드포인트 등록
-
-**Objective:** Stripe Dashboard에 Webhook URL 등록
-
-**Taehyeon이 직접 수행 (또는 API로):**
-
-1. Stripe Dashboard → Developers → Webhooks → Add endpoint
-2. URL: `https://commentlink-xi.vercel.app/api/stripe/webhook`
-3. Events to listen:
-   - `checkout.session.completed`
-   - `customer.subscription.updated`
-   - `customer.subscription.deleted`
-   - `invoice.payment_failed`
-4. Signing secret 복사 → `STRIPE_WEBHOOK_SECRET`으로 설정
-
----
-
-### Task 4.3: Stripe Customer Portal 설정
-
-**Objective:** Stripe Dashboard에서 Customer Portal 구성
+### Task 4.2: Polar Webhook 엔드포인트 등록 (Taehyeon)
 
 **Taehyeon이 직접 수행:**
 
-1. Stripe Dashboard → Settings → Billing → Customer Portal
-2. Features 구성: 구독 취소, 결제 수단 변경 활성화
-3. Business info, branding 설정
+1. Polar Dashboard → Settings → Integrations → Webhooks
+2. URL: `https://commentlink-xi.vercel.app/api/webhook/polar`
+3. Events: `subscription.*`, `order.paid`
 
 ---
 
-### Task 4.4: Stripe test mode로 E2E 테스트
-
-**Objective:** 전체 흐름 테스트 (Checkout → Webhook → DB → UI)
+### Task 4.3: E2E 테스트
 
 **테스트 시나리오:**
-1. 대시보드 → Pricing → Pro 결제하기 클릭
-2. Stripe Checkout 페이지 (test mode) → 4242 4242 4242 4242 입력
-3. 결제 완료 → `/dashboard?upgraded=true` 리다이렉트
-4. DB 확인: `users.plan = 'pro'`, `subscriptions` row 생성
-5. 대시보드: usage meter가 Pro로 표시
-6. Settings → 구독 관리 → Customer Portal 열림
-7. Customer Portal에서 구독 취소
-8. Webhook 수신 → `users.plan = 'free'`로 복원
-
-**Commit:** N/A (테스트 전용)
+1. 대시보드 → Pricing → Pro 결제하기
+2. Polar Checkout (sandbox) → 결제 완료
+3. `/dashboard?upgraded=true` 리다이렉트
+4. DB: `users.plan = 'pro'`, `subscriptions` row 확인
+5. Dashboard: usage meter Pro로 표시
+6. Settings → 구독 관리 → Polar Portal 열림
+7. Portal에서 구독 취소
+8. Webhook → `users.plan = 'free'` 복원
 
 ---
 
@@ -884,40 +652,49 @@ echo "NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY" | vercel env add NEXT_PUBLIC_STRIPE_PU
 | 1.1 | subscriptions 테이블 | 1 | migration SQL | 10m |
 | 1.2 | usage 테이블 | 1 | migration SQL | 10m |
 | 1.3 | plan_config 테이블 | 1 | migration SQL | 10m |
-| 1.4 | **Stripe 계정 생성 (Taehyeon)** | 1 | — | 30m |
-| 2.1 | Stripe SDK 설치 | 2 | package.json | 5m |
-| 2.2 | Stripe client 유틸 | 2 | src/lib/stripe/* | 15m |
-| 2.3 | Checkout API | 2 | api/stripe/checkout | 30m |
-| 2.4 | Webhook 엔드포인트 | 2 | api/stripe/webhook | 45m |
-| 2.5 | Customer Portal API | 2 | api/stripe/portal | 20m |
-| 2.6 | usage 카운트 연동 | 2 | webhook + RPC | 20m |
-| 2.7 | plan 제한 guard | 2 | lib/plan-guard + webhook | 30m |
+| 1.4 | users에 polar_customer_id | 1 | migration SQL | 5m |
+| 1.5 | **Polar 계정 생성 (Taehyeon)** | 1 | — | 20m |
+| 2.1 | SDK 설치 | 2 | package.json | 5m |
+| 2.2 | Checkout route | 2 | app/checkout/route.ts | 15m |
+| 2.3 | Webhook route | 2 | app/api/webhook/polar | 30m |
+| 2.4 | Customer Portal route | 2 | app/portal/route.ts | 20m |
+| 2.5 | usage + plan guard | 2 | lib/plan-guard + webhook | 30m |
 | 3.1 | 요금제 비교 페이지 | 3 | pricing/page | 45m |
 | 3.2 | 대시보드 사용량 UI | 3 | dashboard/page | 30m |
 | 3.3 | 업그레이드 배너 | 3 | dashboard/page | 15m |
 | 3.4 | Settings 구독 관리 | 3 | settings/page | 15m |
 | 3.5 | 계정 연결 제한 | 3 | api/accounts/connect | 20m |
 | 4.1 | Vercel 환경변수 | 4 | — | 10m |
-| 4.2 | Webhook 등록 (Taehyeon) | 4 | — | 15m |
-| 4.3 | Portal 설정 (Taehyeon) | 4 | — | 15m |
-| 4.4 | E2E 테스트 | 4 | — | 30m |
+| 4.2 | Webhook 등록 (Taehyeon) | 4 | — | 10m |
+| 4.3 | E2E 테스트 | 4 | — | 30m |
 
-**총 예상 시간:** ~7-8시간 (개발 5-6시간 + Taehyeon 작업 1-2시간)
+**총 예상 시간:** ~6시간 (개발 4-5시간 + Taehyeon 작업 1시간)
+
+---
+
+## Polar vs Stripe 코드량 비교
+
+| 구성요소 | Stripe | Polar |
+|---------|--------|-------|
+| SDK 설치 | 2 패키지 | 1 패키지 |
+| Checkout | 커스텀 API route 50줄 | **SDK 한 줄** |
+| Webhook | 커스텀 서명 검증 80줄 | **SDK handler** |
+| Customer Portal | 커스텀 API route 30줄 | **SDK 한 줄** |
+| 세금 처리 | 직접 구현 | **MoR 자동** |
+| **총 신규 코드량** | ~300줄 | **~150줄** |
 
 ---
 
 ## Risks & Open Questions
 
-| 리스크 | 영향 | 완화 |
-|--------|------|------|
-| Stripe 한국 결제 활성화 지연 | 결제 연동 불가 | Stripe Korea 지원팀 컨택, 대안으로 포트원 |
-| 요금제 가격 미확정 | Price ID 생성 불가 | 가격 확정 후 Task 1.4 진행 |
-| `users` 테이블에 `stripe_customer_id` 컬럼 없음 | migration 추가 필요 | Task 1.1과 함께 추가 |
-| 현재 webhook이 service_role로 전체 BYPASS | plan 제한이 무시될 수 있음 | service_role 사용은 유지하되, plan-guard에서 명시적 체크 |
-| 무료 → Pro 전환 시 일할 계산 | Stripe가 자동 처리 | Stripe 기본 동작 의존 |
+| 리스크 | 완화 |
+|--------|------|
+| Polar 한국 원화(KRW) 결제 지원 여부 | 테스트 필요. USD로 대체 가능 |
+| `@polar-sh/nextjs` SDK의 webhook payload 타입 | 공식 문서 기반 작성, 실제 payload 확인 필요 |
+| 한 사용자 = 한 구독 (Polar 기본) | DMify에도 1 plan만 필요하므로 문제없음 |
+| sandbox → production 전환 | 환경변수 `POLAR_SERVER`로 제어 |
 
-**Open Questions (Taehyeon 결정 필요):**
-1. ~~결제 서비스: Stripe? 포트원? 토스?~~ → **Stripe** (가정)
-2. **요금제 가격**: ₩19,900 / ₩49,900 확정?
-3. **무료 플랜 DM 한도**: 100건/월 적절?
-4. **Stripe 계정**: 개인이름 or 법인명?
+**Open Questions (Taehyeon):**
+1. **요금제 가격**: ₩19,900 / ₩49,900 확정?
+2. **무료 DM 한도**: 100건/월 적절?
+3. **Polar 가입**: GitHub or Google 이메일로?
