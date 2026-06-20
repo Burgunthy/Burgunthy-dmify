@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from "next/server"
-import { getServiceClient } from "@/lib/supabase/server"
 import { expiryFromTtl } from "@/lib/instagram"
 
 function getEnv(key: string): string {
@@ -37,6 +36,44 @@ function getUserIdFromCookie(request: NextRequest): string | null {
   } catch {
     return null
   }
+}
+
+/**
+ * Upsert an Instagram account into Supabase via direct REST API call.
+ * This completely bypasses @supabase/supabase-js and @supabase/ssr to avoid
+ * any internal GoTrue/auth client initialization that could trigger unexpected
+ * GET requests to GoTrue (which returns "Unsupported request - method type: get").
+ */
+async function upsertAccountViaRestApi(
+  supabaseUrl: string,
+  serviceRoleKey: string,
+  data: {
+    user_id: string
+    ig_id: string
+    ig_username: string
+    access_token: string
+    token_expires_at?: string
+  }
+): Promise<{ error?: string }> {
+  const url = `${supabaseUrl}/rest/v1/accounts`
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      apikey: serviceRoleKey,
+      Authorization: `Bearer ${serviceRoleKey}`,
+      Prefer: "resolution=merge-duplicates,return=representation",
+    },
+    body: JSON.stringify(data),
+  })
+
+  if (!res.ok) {
+    const body = await res.text()
+    console.error("[ig callback] REST API upsert failed:", res.status, body)
+    return { error: `DB error ${res.status}: ${body.slice(0, 200)}` }
+  }
+
+  return {}
 }
 
 export async function GET(request: NextRequest) {
@@ -151,24 +188,20 @@ export async function GET(request: NextRequest) {
       return NextResponse.redirect(new URL("/auth/login", request.url))
     }
 
-    // --- Step 5: Save to database using service role client (bypasses RLS) ---
-    const supabase = await getServiceClient()
-    const { error: dbError } = await supabase.from("accounts").upsert(
-      {
-        user_id: userId,
-        ig_id: String(igUserId),
-        ig_username: igDetail.username || "",
-        access_token: longToken,
-        ...(tokenExpiresAt ? { token_expires_at: tokenExpiresAt } : {}),
-      },
-      { onConflict: "ig_id" }
-    )
+    // --- Step 5: Save to database via direct REST API (no Supabase client, no GoTrue) ---
+    const SUPABASE_URL = getEnv("NEXT_PUBLIC_SUPABASE_URL")
+    const SERVICE_ROLE_KEY = getEnv("SUPABASE_SERVICE_ROLE_KEY")
 
-    if (dbError) {
-      console.error("[ig callback] DB upsert error:", dbError.message, dbError.details)
-      const detail = encodeURIComponent(
-        `${dbError.message} | ${dbError.details || "none"} | code: ${dbError.code || "none"}`
-      )
+    const dbResult = await upsertAccountViaRestApi(SUPABASE_URL, SERVICE_ROLE_KEY, {
+      user_id: userId,
+      ig_id: String(igUserId),
+      ig_username: igDetail.username || "",
+      access_token: longToken,
+      ...(tokenExpiresAt ? { token_expires_at: tokenExpiresAt } : {}),
+    })
+
+    if (dbResult.error) {
+      const detail = encodeURIComponent(dbResult.error)
       return NextResponse.redirect(
         new URL(`/dashboard/accounts?error=db_error&detail=${detail}`, request.url)
       )
