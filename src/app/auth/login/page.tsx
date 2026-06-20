@@ -1,11 +1,14 @@
 "use client";
 
 import { createClient } from "@/lib/supabase/client";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 
 export default function LoginPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const supabase = createClient();
+  const errorParam = searchParams.get("error");
+  const detailParam = searchParams.get("detail");
 
   const loginWithGoogle = async () => {
     await supabase.auth.signInWithOAuth({
@@ -54,6 +57,18 @@ export default function LoginPage() {
           <span className="text-xs font-medium text-gray-400">Social Login</span>
           <div className="h-px flex-1 bg-gray-200" />
         </div>
+
+        {/* Error Message */}
+        {errorParam && (
+          <div className="rounded-lg border border-red-200 bg-red-50 p-3">
+            <p className="text-sm font-medium text-red-800">
+              Login failed ({errorParam})
+            </p>
+            {detailParam && (
+              <p className="mt-1 text-xs text-red-600">{decodeURIComponent(detailParam)}</p>
+            )}
+          </div>
+        )}
 
         {/* OAuth Buttons */}
         <div className="space-y-3">

@@ -7,16 +7,24 @@ export async function GET(request: Request) {
   const redirectTo = searchParams.get("next") ?? "/dashboard";
 
   if (code) {
-    const supabase = await createClient();
-    const { error } = await supabase.auth.exchangeCodeForSession(code);
+    try {
+      const supabase = await createClient();
+      const { error } = await supabase.auth.exchangeCodeForSession(code);
 
-    if (!error) {
-      return NextResponse.redirect(`${origin}${redirectTo}`);
+      if (!error) {
+        return NextResponse.redirect(`${origin}${redirectTo}`);
+      }
+
+      console.error("Auth callback error:", error.message);
+      const detail = encodeURIComponent((error.message || "unknown").slice(0, 200));
+      return NextResponse.redirect(`${origin}/auth/login?error=auth_failed&detail=${detail}`);
+    } catch (err) {
+      console.error("Auth callback exception:", err);
+      const detail = encodeURIComponent((err instanceof Error ? err.message : String(err)).slice(0, 200));
+      return NextResponse.redirect(`${origin}/auth/login?error=auth_exception&detail=${detail}`);
     }
-
-    console.error("Auth callback error:", error.message);
   }
 
-  // Redirect to login on error
-  return NextResponse.redirect(`${origin}/auth/login`);
+  // No code parameter
+  return NextResponse.redirect(`${origin}/auth/login?error=no_code`);
 }

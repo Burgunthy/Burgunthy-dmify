@@ -12,15 +12,23 @@ export async function GET(request: Request) {
   const next = searchParams.get("next") ?? "/";
 
   if (code) {
-    const supabase = await createClient();
-    const { error } = await supabase.auth.exchangeCodeForSession(code);
+    try {
+      const supabase = await createClient();
+      const { error } = await supabase.auth.exchangeCodeForSession(code);
 
-    if (!error) {
-      return NextResponse.redirect(`${origin}${next}`);
+      if (!error) {
+        return NextResponse.redirect(`${origin}${next}`);
+      }
+
+      console.error("[API Auth Callback] Error exchanging code:", error.message);
+      const detail = encodeURIComponent((error.message || "unknown").slice(0, 200));
+      return NextResponse.redirect(`${origin}/auth/login?error=api_auth_failed&detail=${detail}`);
+    } catch (err) {
+      console.error("[API Auth Callback] Exception:", err);
+      const detail = encodeURIComponent((err instanceof Error ? err.message : String(err)).slice(0, 200));
+      return NextResponse.redirect(`${origin}/auth/login?error=api_auth_exception&detail=${detail}`);
     }
-
-    console.error("[API Auth Callback] Error exchanging code:", error.message);
   }
 
-  return NextResponse.redirect(`${origin}/auth/login?error=auth_callback_failed`);
+  return NextResponse.redirect(`${origin}/auth/login?error=no_code`);
 }
