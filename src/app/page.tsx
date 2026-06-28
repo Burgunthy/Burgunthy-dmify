@@ -3,7 +3,7 @@
 import { useI18n } from '@/lib/i18n-context';
 
 function LandingPageContent() {
-  const { lang, setLang, t } = useI18n();
+  const { t } = useI18n();
 
   return (
     <div className="flex flex-col flex-1 bg-background">
@@ -24,39 +24,6 @@ function LandingPageContent() {
             <a href="#pricing" className="hover:text-primary transition-colors">{t('nav.pricing')}</a>
           </nav>
           <div className="flex items-center gap-3">
-            {/* Language toggle */}
-            <div className="flex items-center rounded-full border border-border overflow-hidden text-xs font-medium">
-              <button
-                onClick={() => setLang('en')}
-                className={`px-2.5 py-1 transition-colors ${
-                  lang === 'en'
-                    ? 'bg-primary text-white'
-                    : 'bg-transparent text-muted hover:text-foreground'
-                }`}
-              >
-                EN
-              </button>
-              <button
-                onClick={() => setLang('ko')}
-                className={`px-2.5 py-1 transition-colors ${
-                  lang === 'ko'
-                    ? 'bg-primary text-white'
-                    : 'bg-transparent text-muted hover:text-foreground'
-                }`}
-              >
-                KR
-              </button>
-              <button
-                onClick={() => setLang('ja')}
-                className={`px-2.5 py-1 transition-colors ${
-                  lang === 'ja'
-                    ? 'bg-primary text-white'
-                    : 'bg-transparent text-muted hover:text-foreground'
-                }`}
-              >
-                JP
-              </button>
-            </div>
             <a
               href="/dashboard"
               className="inline-flex items-center px-4 py-2 rounded-full bg-primary text-white text-sm font-medium hover:bg-primary-dark transition-colors"

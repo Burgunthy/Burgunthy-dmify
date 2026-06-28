@@ -18,7 +18,6 @@ import {
 import { useState } from "react"
 import { createClient } from "@/lib/supabase/client"
 import { useI18n } from "@/lib/i18n-context"
-import { LanguageSwitcher } from "@/components/LanguageSwitcher"
 
 const navItems = [
   { href: "/dashboard", labelKey: "dash.nav.dashboard", icon: LayoutDashboard },
@@ -133,9 +132,6 @@ export default function DashboardLayout({
           <h1 className="text-lg font-semibold text-zinc-900 dark:text-zinc-100">
             {t(navItems.find((item) => isActive(item.href))?.labelKey ?? "dash.nav.dashboard")}
           </h1>
-          <div className="ml-auto">
-            <LanguageSwitcher />
-          </div>
         </header>
 
         {/* Page content */}

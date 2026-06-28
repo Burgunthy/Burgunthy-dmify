@@ -37,10 +37,7 @@ function getServerSnapshot(): Lang {
 }
 
 function readStoredLang(): Lang {
-  try {
-    const stored = localStorage.getItem(STORAGE_KEY);
-    if (stored === 'ko' || stored === 'en' || stored === 'ja') return stored;
-  } catch {}
+  // English-only app; ignore any legacy stored preference.
   return DEFAULT_LANG;
 }
 
