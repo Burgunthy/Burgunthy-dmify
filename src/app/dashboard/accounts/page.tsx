@@ -2,6 +2,7 @@
 
 import { Suspense, useEffect, useState } from "react"
 import { createClient } from "@/lib/supabase/client"
+import { DISCLOSURE_PRESETS } from "@/lib/disclosure"
 import { useSearchParams, useRouter } from "next/navigation"
 import {
   Trash2,
@@ -46,6 +47,7 @@ interface AccountSettings {
   follow_check_enabled: boolean
   private_reply_text: string
   not_following_text: string
+  disclosure_text: string
 }
 
 type OAuthStatus = {
@@ -121,6 +123,7 @@ function AccountsContent() {
     follow_check_enabled: false,
     private_reply_text: "",
     not_following_text: "",
+    disclosure_text: "",
   })
   const [saving, setSaving] = useState(false)
   const [refreshingId, setRefreshingId] = useState<string | null>(null)
@@ -204,6 +207,7 @@ function AccountsContent() {
       follow_check_enabled: account.follow_check_enabled,
       private_reply_text: account.private_reply_text || "",
       not_following_text: account.not_following_text || "",
+      disclosure_text: account.disclosure_text || "",
     })
   }
 
@@ -220,6 +224,7 @@ function AccountsContent() {
           follow_check_enabled: settings.follow_check_enabled,
           private_reply_text: settings.private_reply_text || null,
           not_following_text: settings.not_following_text || null,
+          disclosure_text: settings.disclosure_text || null,
         }),
       })
       if (!res.ok) {
@@ -588,6 +593,37 @@ function AccountsContent() {
                         rows={3}
                         className="w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm text-zinc-900 placeholder-zinc-400 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100"
                         placeholder="비팔로워에게 보낼 DM 메시지 (선택사항)"
+                      />
+                    </div>
+
+                    {/* 수수료 고지문구 (제휴 링크 법적 의무) */}
+                    <div>
+                      <label className="mb-1.5 block text-xs font-medium text-zinc-700 dark:text-zinc-300">
+                        수수료 고지문구 (제휴 링크 사용 시)
+                      </label>
+                      <select
+                        value=""
+                        onChange={(e) => {
+                          const p = DISCLOSURE_PRESETS.find((x) => x.id === e.target.value)
+                          if (p) setSettings((prev) => ({ ...prev, disclosure_text: p.text }))
+                        }}
+                        className="mb-2 w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm text-zinc-900 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100"
+                      >
+                        <option value="">프리셋에서 선택...</option>
+                        {DISCLOSURE_PRESETS.map((p) => (
+                          <option key={p.id} value={p.id}>
+                            {p.label}
+                          </option>
+                        ))}
+                      </select>
+                      <textarea
+                        value={settings.disclosure_text}
+                        onChange={(e) =>
+                          setSettings((prev) => ({ ...prev, disclosure_text: e.target.value }))
+                        }
+                        rows={2}
+                        className="w-full rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm text-zinc-900 placeholder-zinc-400 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100"
+                        placeholder="DM 맨 앞에 자동 삽입됩니다. 비워두면 미사용."
                       />
                     </div>
                   </div>

@@ -20,6 +20,7 @@ export interface AccountRow {
   follow_check_enabled: boolean
   private_reply_text: string
   not_following_text: string | null
+  disclosure_text: string | null
 }
 
 export interface PostKeywordRow {
@@ -113,6 +114,11 @@ export function buildDmMessage(
     dmMessage = dmMessage ? `${dmMessage}\n\n${linkBlock}` : linkBlock
   } else if (linkUrl && dmMessage) {
     dmMessage = dmMessage + '\n\n🔗 ' + linkUrl
+  }
+
+  // Prepend the affiliate disclosure (PLAN 4-2 / 7-2) when set on the account.
+  if (account.disclosure_text) {
+    dmMessage = dmMessage ? `${account.disclosure_text}\n\n${dmMessage}` : account.disclosure_text
   }
 
   return dmMessage

@@ -21,6 +21,7 @@ const account: AccountRow = {
   follow_check_enabled: true,
   private_reply_text: '기본 DM',
   not_following_text: '팔로우 안됨',
+  disclosure_text: null,
 }
 
 const basePost = (): PostRow => ({
@@ -71,6 +72,13 @@ describe('buildDmMessage — priority order', () => {
     }))
     const out = buildDmMessage(account, basePost(), undefined, true, products)
     expect(out.split('\n').filter((l) => l.startsWith('🔗')).length).toBe(3)
+  })
+
+  it('prepends the account disclosure text when set', () => {
+    const acc = { ...account, disclosure_text: '제휴 고지문' }
+    expect(buildDmMessage(acc, { ...basePost(), dm_message: '본문' }, undefined, true)).toBe(
+      '제휴 고지문\n\n본문'
+    )
   })
 
   it('uses not-following path for non-followers', () => {
